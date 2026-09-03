@@ -89,6 +89,22 @@ public sealed class MonitorDatabase : IDisposable
         _connection.Dispose();
     }
 
+    private void AddColumnIfMissing(string table, string column, string definition)
+    {
+        lock (_gate)
+        {
+            using var probe = _connection.CreateCommand();
+            probe.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = $name;";
+            probe.Parameters.AddWithValue("$name", column);
+            if (Convert.ToInt64(probe.ExecuteScalar()) > 0)
+            {
+                return;
+            }
+        }
+
+        Execute($"ALTER TABLE {table} ADD COLUMN {column} {definition};");
+    }
+
     private void Migrate()
     {
         Execute("""
@@ -99,12 +115,14 @@ public sealed class MonitorDatabase : IDisposable
                 x REAL,
                 y REAL,
                 key_code INTEGER,
+                key_bucket TEXT,
                 characters TEXT,
                 modifiers INTEGER DEFAULT 0,
                 scroll_delta INTEGER DEFAULT 0,
                 is_auto_repeat INTEGER DEFAULT 0
             );
             """);
+        AddColumnIfMissing("events", "key_bucket", "TEXT");
         Execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);");
         Execute("CREATE INDEX IF NOT EXISTS idx_events_kind_ts ON events(kind, ts);");
         Execute("""

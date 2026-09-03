@@ -168,15 +168,10 @@ public sealed class MetricsAggregator
         _lastEventWallTime = wallTime;
     }
 
-    private void RotateIfNeeded(DateTimeOffset date)
+    /// <summary>Zeroes every counter and the pending delta, moving the aggregator onto <paramref name="day"/>.</summary>
+    public void Reset(string day)
     {
-        var currentDay = EventRepository.DayString(date);
-        if (currentDay == Day)
-        {
-            return;
-        }
-
-        Day = currentDay;
+        Day = day;
         KeyCount = 0;
         ClickCount = 0;
         ScrollCount = 0;
@@ -194,6 +189,15 @@ public sealed class MetricsAggregator
         _deltaMoveDistance = 0;
         _deltaActiveInputSeconds = 0;
         _deltaActiveAppSeconds = 0;
+    }
+
+    private void RotateIfNeeded(DateTimeOffset date)
+    {
+        var currentDay = EventRepository.DayString(date);
+        if (currentDay != Day)
+        {
+            Reset(currentDay);
+        }
     }
 
     public static int MinuteIndex(DateTimeOffset date)

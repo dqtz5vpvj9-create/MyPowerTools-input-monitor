@@ -89,7 +89,9 @@ public sealed class InputMonitorModule : IMptModule, IMptModuleLifecycle
             Command("input-monitor.rest", "Start a rest break", "Open the rest overlay using the current fatigue value"),
             Command("input-monitor.pause", "Pause or resume reminders", "Toggle rest reminders without stopping collection"),
             Command("input-monitor.skip", "Skip the current rest", "Dismiss the rest overlay and raise the next threshold"),
-            Command("input-monitor.set-category", "Override an app category", "Remap a process to a statistics category")
+            Command("input-monitor.set-category", "Override an app category", "Remap a process to a statistics category"),
+            Command("input-monitor.capture", "Start or stop collection", "Pause or resume keyboard, mouse and foreground-app collection without stopping reminders"),
+            Command("input-monitor.data.clear", "Clear collected data", "Delete stored input events, app usage and daily statistics")
         ];
         return ValueTask.FromResult(commands);
     }
@@ -165,6 +167,26 @@ public sealed class InputMonitorModule : IMptModule, IMptModuleLifecycle
                 return Ok(request, JsonSerializer.Serialize(new { bundleId, category = AppCategories.ToStorage(category) }, JsonOptions));
             }
 
+            if (string.Equals(request.CommandId, "input-monitor.capture", StringComparison.OrdinalIgnoreCase))
+            {
+                var running = ReadBool(request.Args, "running");
+                if (running is null)
+                {
+                    return ValueTask.FromResult(Failed(request, MptErrorCodes.ValidationFailed, "running (boolean) is required."));
+                }
+
+                host.SetCaptureRunning(running.Value);
+                Interlocked.Increment(ref _eventSequence);
+                return Ok(request, JsonSerializer.Serialize(new { running = host.CaptureRunning, snapshot = host.Snapshot() }, JsonOptions));
+            }
+
+            if (string.Equals(request.CommandId, "input-monitor.data.clear", StringComparison.OrdinalIgnoreCase))
+            {
+                host.ClearCollectedData();
+                Interlocked.Increment(ref _eventSequence);
+                return Ok(request, JsonSerializer.Serialize(new { cleared = true, snapshot = host.Snapshot() }, JsonOptions));
+            }
+
             return ValueTask.FromResult(Failed(request, MptErrorCodes.NotFound, $"Command '{request.CommandId}' is not implemented by Input Monitor."));
         }
         catch (Exception exception)
@@ -197,7 +219,7 @@ public sealed class InputMonitorModule : IMptModule, IMptModuleLifecycle
             "fatigueFromKeyboard": { "type": "boolean", "title": "键盘计入疲劳", "default": true },
             "fatigueFromMouse": { "type": "boolean", "title": "鼠标计入疲劳", "default": true },
             "fatigueFromApp": { "type": "boolean", "title": "前台窗口计入疲劳", "default": true },
-            "privacyMode": { "type": "boolean", "title": "隐私模式（不记录按键字符）", "default": false },
+            "privacyMode": { "type": "boolean", "title": "隐私模式（不记录按键字符与键码）", "default": true },
             "trackSampleDistance": { "type": "number", "title": "轨迹采样最小距离（像素）", "minimum": 5, "maximum": 200, "default": 30 },
             "appHeartbeatSeconds": { "type": "number", "title": "前台窗口心跳（秒）", "minimum": 5, "maximum": 120, "default": 30 },
             "remindAfterResume": { "type": "boolean", "title": "恢复提醒后若已超阈值立即提醒", "default": true },

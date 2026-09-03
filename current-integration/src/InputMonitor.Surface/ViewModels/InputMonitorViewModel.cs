@@ -35,6 +35,7 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
     private string _frequencyUnit = "次按键";
     private string _heatValueKind = "count";
     private bool _paused;
+    private bool _captureRunning;
     private bool _showKeyboard;
     private bool _showMouse = true;
     private bool _showApps;
@@ -81,6 +82,8 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
         });
         RestCommand = new MptAsyncRelayCommand(() => RunAsync("input-monitor.rest"), null, "InputMonitorRest");
         PauseCommand = new MptAsyncRelayCommand(TogglePauseAsync, null, "InputMonitorPause");
+        CaptureToggleCommand = new MptAsyncRelayCommand(ToggleCaptureAsync, null, "InputMonitorCaptureToggle");
+        ClearDataCommand = new MptAsyncRelayCommand(ClearDataAsync, null, "InputMonitorClearData");
         RefreshCommand = new MptAsyncRelayCommand(() => RefreshAsync(_lifetime.Token), null, "InputMonitorRefresh");
         PreviousDayCommand = new ParamCommand(_ => ShiftDay(-1));
         NextDayCommand = new ParamCommand(_ => ShiftDay(1));
@@ -112,6 +115,8 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
     public ICommand SelectDimensionCommand => _selectDimension;
     public ICommand RestCommand { get; }
     public ICommand PauseCommand { get; }
+    public ICommand CaptureToggleCommand { get; }
+    public ICommand ClearDataCommand { get; }
     public ICommand RefreshCommand { get; }
     public ICommand PreviousDayCommand { get; }
     public ICommand NextDayCommand { get; }
@@ -189,6 +194,8 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
     public string HeatValueKind { get => _heatValueKind; private set => SetProperty(ref _heatValueKind, value); }
     public string PauseLabel => _paused ? "恢复提醒" : "暂停提醒";
     public bool IsReminderPaused => _paused;
+    public string CaptureToggleLabel => _captureRunning ? "停止采集" : "恢复采集";
+    public bool IsCaptureRunning => _captureRunning;
     public bool ShowKeyboard { get => _showKeyboard; private set => SetProperty(ref _showKeyboard, value); }
     public bool ShowMouse { get => _showMouse; private set => SetProperty(ref _showMouse, value); }
     public bool ShowApps { get => _showApps; private set => SetProperty(ref _showApps, value); }
@@ -239,6 +246,64 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
         OnPropertyChanged(nameof(IsSelectedToday));
         OnPropertyChanged(nameof(CanGoForward));
         OnPropertyChanged(nameof(ShowBackToToday));
+    }
+
+    private async Task ToggleCaptureAsync()
+    {
+        var next = !_captureRunning;
+        await RunOnUiAsync(() => SetCaptureUi(next, next ? "正在恢复采集…" : "正在停止采集…"))
+            .ConfigureAwait(false);
+
+        try
+        {
+            var response = await ExecuteAsync(
+                    "input-monitor.capture",
+                    new JsonObject { ["running"] = next },
+                    _lifetime.Token)
+                .ConfigureAwait(false);
+            if (!response.Success)
+            {
+                throw new InvalidOperationException(response.Error?.Message ?? "切换采集状态失败。");
+            }
+
+            await RunOnUiAsync(() => SetCaptureUi(
+                    next,
+                    next ? "已恢复数据采集" : "已停止数据采集，不再记录输入活动"))
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await RunOnUiAsync(() => SetCaptureUi(!next, exception.Message)).ConfigureAwait(false);
+        }
+    }
+
+    private async Task ClearDataAsync()
+    {
+        await RunOnUiAsync(() => StatusText = "正在清除采集数据…").ConfigureAwait(false);
+        try
+        {
+            var response = await ExecuteAsync("input-monitor.data.clear", new JsonObject(), _lifetime.Token)
+                .ConfigureAwait(false);
+            if (!response.Success)
+            {
+                throw new InvalidOperationException(response.Error?.Message ?? "清除数据失败。");
+            }
+
+            await RefreshAsync(_lifetime.Token).ConfigureAwait(false);
+            await RunOnUiAsync(() => StatusText = "已清除全部采集数据").ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await RunOnUiAsync(() => StatusText = exception.Message).ConfigureAwait(false);
+        }
+    }
+
+    private void SetCaptureUi(bool running, string status)
+    {
+        _captureRunning = running;
+        OnPropertyChanged(nameof(CaptureToggleLabel));
+        OnPropertyChanged(nameof(IsCaptureRunning));
+        StatusText = status;
     }
 
     private async Task TogglePauseAsync()
@@ -362,6 +427,9 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
         FatigueText = $"疲劳 {fatigue.GetProperty("percentage").GetInt32()}%";
         FrontAppText = $"前台应用：{snapshot.GetProperty("frontAppName").GetString() ?? "—"}";
         var capturing = snapshot.GetProperty("captureRunning").GetBoolean();
+        _captureRunning = capturing;
+        OnPropertyChanged(nameof(CaptureToggleLabel));
+        OnPropertyChanged(nameof(IsCaptureRunning));
         StatusText = capturing
             ? (_paused ? "正在采集本机输入 · 提醒已暂停" : "正在采集本机输入")
             : "采集未运行";

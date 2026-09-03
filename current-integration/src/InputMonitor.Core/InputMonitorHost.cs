@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -27,6 +28,7 @@ public sealed class InputMonitorHost : IDisposable
     private readonly Timer _fatigueTimer;
     private readonly object _settingsGate = new();
     private CancellationTokenSource _lifetime = new();
+    private int _fatigueStateDirty;
     private Thread? _consumer;
     private bool _running;
     private bool _disposed;
@@ -56,7 +58,7 @@ public sealed class InputMonitorHost : IDisposable
         _fatigue = new FatigueEngine(Settings)
         {
             OnShouldRemind = ShowRest,
-            OnChanged = PersistSettings
+            OnChanged = MarkFatigueStateDirty
         };
         _capture = capture;
         _frontApp = frontApp;
@@ -68,7 +70,15 @@ public sealed class InputMonitorHost : IDisposable
 
         if (_frontApp is not null)
         {
-            _frontApp.SessionCompleted += session => _repository.InsertAppSession(session);
+            _frontApp.SessionCompleted += session =>
+            {
+                if (Settings.PrivacyMode)
+                {
+                    session.WindowTitle = null;
+                }
+
+                _repository.InsertAppSession(session);
+            };
             _frontApp.Heartbeat += (_, _) =>
             {
                 _fatigue.NotifyActivity(FatigueActivitySource.App);
@@ -135,6 +145,36 @@ public sealed class InputMonitorHost : IDisposable
         Drain();
         _consumer?.Join(TimeSpan.FromSeconds(2));
         _consumer = null;
+    }
+
+    /// <summary>
+    /// Stops or resumes raw input and foreground-app collection while keeping the host
+    /// (reminders, drain timer, aggregates) alive. Used by the surface's "停止采集" toggle.
+    /// </summary>
+    public void SetCaptureRunning(bool running)
+    {
+        if (!_running)
+        {
+            if (running)
+            {
+                Start();
+            }
+            return;
+        }
+
+        if (running)
+        {
+            _capture?.UpdateTrackSampleDistance(Settings.TrackSampleDistance);
+            _capture?.Start();
+            _frontApp?.Start();
+        }
+        else
+        {
+            _capture?.Stop();
+            _frontApp?.Stop();
+            _buffer.Flush();
+            Drain();
+        }
     }
 
     public LiveSnapshot Snapshot()
@@ -215,7 +255,9 @@ public sealed class InputMonitorHost : IDisposable
     {
         if (Settings.PrivacyMode && record.Kind is InputEventKind.KeyDown or InputEventKind.KeyUp)
         {
-            record = record with { Characters = null };
+            // The raw code stays in memory so key hold durations still pair up, but the
+            // repository persists the coarse bucket instead of the code itself.
+            record = record with { Characters = null, KeyBucket = KeyBuckets.For(record.KeyCode) };
         }
 
         _events.Enqueue(record);
@@ -250,6 +292,7 @@ public sealed class InputMonitorHost : IDisposable
 
     private void Drain()
     {
+        FlushFatigueState();
         var (day, delta) = _aggregator.DrainDelta();
         if (delta.KeyCount == 0 &&
             delta.ClickCount == 0 &&
@@ -280,13 +323,39 @@ public sealed class InputMonitorHost : IDisposable
         }
     }
 
+    /// <summary>Drops every collected row and resets the in-memory counters.</summary>
+    public void ClearCollectedData()
+    {
+        _buffer.Flush();
+        _repository.ClearAllData();
+        _aggregator.Reset(EventRepository.DayString(DateTimeOffset.Now));
+    }
+
     private void PersistSettings()
+    {
+        Volatile.Write(ref _fatigueStateDirty, 0);
+        WriteSettings();
+    }
+
+    private void MarkFatigueStateDirty() => Volatile.Write(ref _fatigueStateDirty, 1);
+
+    private void FlushFatigueState()
+    {
+        if (Interlocked.Exchange(ref _fatigueStateDirty, 0) == 1)
+        {
+            WriteSettings();
+        }
+    }
+
+    private void WriteSettings()
     {
         lock (_settingsGate)
         {
             Settings.CategoryOverrides = new Dictionary<string, AppCategory>(Categories.Overrides, StringComparer.OrdinalIgnoreCase);
             var json = JsonSerializer.Serialize(Settings, JsonOptions);
-            File.WriteAllText(_settingsPath, json);
+            var temporaryPath = _settingsPath + ".tmp";
+            File.WriteAllText(temporaryPath, json);
+            File.Move(temporaryPath, _settingsPath, overwrite: true);
         }
     }
 
@@ -303,8 +372,13 @@ public sealed class InputMonitorHost : IDisposable
             loaded.Clamp();
             return loaded;
         }
-        catch (JsonException)
+        catch (JsonException exception)
         {
+            var corruptPath = path + ".corrupt";
+            File.Move(path, corruptPath, overwrite: true);
+            Trace.TraceError(
+                $"InputMonitor: settings file '{path}' could not be parsed ({exception.Message}). " +
+                $"It was kept as '{corruptPath}'; privacy, retention and category overrides fall back to defaults until it is restored.");
             return new MonitorSettings();
         }
     }

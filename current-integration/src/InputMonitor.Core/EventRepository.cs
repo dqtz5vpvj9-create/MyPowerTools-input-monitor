@@ -31,8 +31,10 @@ public sealed class EventRepository
             return (now, now);
         }
 
-        var start = new DateTimeOffset(parsed.Date, TimeZoneInfo.Local.GetUtcOffset(parsed.Date));
-        var end = start.AddDays(1);
+        var startLocal = parsed.Date;
+        var endLocal = startLocal.AddDays(1);
+        var start = new DateTimeOffset(startLocal, TimeZoneInfo.Local.GetUtcOffset(startLocal));
+        var end = new DateTimeOffset(endLocal, TimeZoneInfo.Local.GetUtcOffset(endLocal));
         return (start.ToUnixTimeSeconds(), end.ToUnixTimeSeconds());
     }
 
@@ -50,14 +52,15 @@ public sealed class EventRepository
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO events (kind, ts, x, y, key_code, characters, modifiers, scroll_delta, is_auto_repeat)
-                VALUES ($kind, $ts, $x, $y, $key, $chars, $mods, $scroll, $repeat);
+                INSERT INTO events (kind, ts, x, y, key_code, key_bucket, characters, modifiers, scroll_delta, is_auto_repeat)
+                VALUES ($kind, $ts, $x, $y, $key, $bucket, $chars, $mods, $scroll, $repeat);
                 """;
             var kind = command.Parameters.Add("$kind", SqliteType.Text);
             var ts = command.Parameters.Add("$ts", SqliteType.Real);
             var x = command.Parameters.Add("$x", SqliteType.Real);
             var y = command.Parameters.Add("$y", SqliteType.Real);
             var key = command.Parameters.Add("$key", SqliteType.Integer);
+            var bucket = command.Parameters.Add("$bucket", SqliteType.Text);
             var chars = command.Parameters.Add("$chars", SqliteType.Text);
             var mods = command.Parameters.Add("$mods", SqliteType.Integer);
             var scroll = command.Parameters.Add("$scroll", SqliteType.Integer);
@@ -68,7 +71,8 @@ public sealed class EventRepository
                 ts.Value = ToUnix(record.WallTime);
                 x.Value = (object?)record.X ?? DBNull.Value;
                 y.Value = (object?)record.Y ?? DBNull.Value;
-                key.Value = (object?)record.KeyCode ?? DBNull.Value;
+                key.Value = record.KeyBucket is null ? (object?)record.KeyCode ?? DBNull.Value : DBNull.Value;
+                bucket.Value = (object?)record.KeyBucket ?? DBNull.Value;
                 chars.Value = (object?)record.Characters ?? DBNull.Value;
                 mods.Value = (long)record.Modifiers;
                 scroll.Value = record.ScrollDelta;
@@ -540,7 +544,7 @@ public sealed class EventRepository
         {
             using var command = connection.CreateCommand();
             command.CommandText = """
-                SELECT COALESCE(characters, 'key:' || key_code) AS label, COUNT(*)
+                SELECT COALESCE(characters, key_bucket, 'key:' || key_code) AS label, COUNT(*)
                 FROM events
                 WHERE ts BETWEEN $start AND $end AND kind = 'keyDown' AND is_auto_repeat = 0
                 GROUP BY label
@@ -610,19 +614,31 @@ public sealed class EventRepository
     public void PurgeExpiredData(int retentionDays)
     {
         var cutoff = DateTimeOffset.Now.AddDays(-retentionDays);
-        var cutoffTs = cutoff.ToUnixTimeSeconds();
-        var cutoffDay = DayString(cutoff);
+        Purge(cutoff.ToUnixTimeSeconds(), DayString(cutoff));
+    }
+
+    /// <summary>Deletes every collected row, including the current day.</summary>
+    public void ClearAllData() => Purge(null, null);
+
+    private void Purge(double? cutoffTs, string? cutoffDay)
+    {
         _db.Run(connection =>
         {
             using var transaction = connection.BeginTransaction();
-            DeleteByNumber(connection, transaction, "DELETE FROM events WHERE ts < $v;", cutoffTs);
-            DeleteByNumber(connection, transaction, "DELETE FROM track_points WHERE ts < $v;", cutoffTs);
-            DeleteByNumber(connection, transaction, "DELETE FROM app_usage WHERE start_ts < $v;", cutoffTs);
+            DeleteRows(connection, transaction, "events", "ts", cutoffTs);
+            DeleteRows(connection, transaction, "track_points", "ts", cutoffTs);
+            DeleteRows(connection, transaction, "app_usage", "start_ts", cutoffTs);
             using (var command = connection.CreateCommand())
             {
                 command.Transaction = transaction;
-                command.CommandText = "DELETE FROM daily_stats WHERE day < $v;";
-                command.Parameters.AddWithValue("$v", cutoffDay);
+                command.CommandText = cutoffDay is null
+                    ? "DELETE FROM daily_stats;"
+                    : "DELETE FROM daily_stats WHERE day < $v;";
+                if (cutoffDay is not null)
+                {
+                    command.Parameters.AddWithValue("$v", cutoffDay);
+                }
+
                 command.ExecuteNonQuery();
             }
 
@@ -845,16 +861,25 @@ public sealed class EventRepository
         }
     }
 
-    private static void DeleteByNumber(
+    private static void DeleteRows(
         SqliteConnection connection,
         SqliteTransaction transaction,
-        string sql,
-        double value)
+        string table,
+        string timestampColumn,
+        double? cutoff)
     {
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = sql;
-        command.Parameters.AddWithValue("$v", value);
+        if (cutoff is { } value)
+        {
+            command.CommandText = $"DELETE FROM {table} WHERE {timestampColumn} < $v;";
+            command.Parameters.AddWithValue("$v", value);
+        }
+        else
+        {
+            command.CommandText = $"DELETE FROM {table};";
+        }
+
         command.ExecuteNonQuery();
     }
 
