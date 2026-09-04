@@ -181,6 +181,21 @@
         </Grid>
       </Border>
 
+      <WrapPanel Margin="20,12,20,0" Orientation="Horizontal">
+        <Button Classes="quiet" Content="‹" Command="{Binding PreviousDayCommand}"
+                IsEnabled="{Binding CanGoBack}" ToolTip.Tip="{Binding PreviousPeriodLabel}"
+                AutomationProperties.Name="{Binding PreviousPeriodLabel}" />
+        <TextBlock Text="{Binding SelectedDateText}" Margin="12,0" VerticalAlignment="Center" FontWeight="SemiBold" />
+        <Button Classes="quiet" Content="›" Command="{Binding NextDayCommand}"
+                IsEnabled="{Binding CanGoForward}" ToolTip.Tip="{Binding NextPeriodLabel}"
+                AutomationProperties.Name="{Binding NextPeriodLabel}" />
+        <CalendarDatePicker x:Name="HistoryDatePicker" SelectedDate="{Binding SelectedDate, Mode=TwoWay}"
+                            DisplayDateEnd="{Binding Today}" Width="160" Margin="12,0"
+                            AutomationProperties.Name="选择历史日期" />
+        <Button Classes="quiet" Content="{Binding CurrentPeriodLabel}" Command="{Binding TodayCommand}"
+                IsVisible="{Binding ShowBackToToday}" />
+      </WrapPanel>
+
       <StackPanel Margin="20" Spacing="16">
         <Border Classes="dashboardCard">
           <StackPanel Spacing="8">
