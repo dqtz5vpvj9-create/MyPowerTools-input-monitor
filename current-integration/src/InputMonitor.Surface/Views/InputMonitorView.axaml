@@ -1,4 +1,5 @@
 <UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:shortcuts="using:MyPowerTools.AvaloniaSdk"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:InputMonitor.Surface.ViewModels"
              xmlns:ctrl="using:InputMonitor.Surface.Controls"
@@ -77,9 +78,9 @@
             <TextBlock Text="{Binding StatusText}" FontSize="13" Foreground="{DynamicResource MptBrushTextSecondary}" />
           </StackPanel>
           <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-            <Button Classes="quiet" Content="开始休息" Command="{Binding RestCommand}" />
-            <Button Classes="quiet" Content="{Binding PauseLabel}" Command="{Binding PauseCommand}" Classes.paused="{Binding IsReminderPaused}" />
-            <Button Classes="quiet" Content="刷新" Command="{Binding RefreshCommand}" />
+            <Button Classes="quiet" Content="开始休息" Command="{Binding RestCommand}" shortcuts:MptShortcutHint.CommandId="input-monitor.ui.rest" />
+            <Button Classes="quiet" Content="{Binding PauseLabel}" Command="{Binding PauseCommand}" shortcuts:MptShortcutHint.CommandId="input-monitor.ui.pause" Classes.paused="{Binding IsReminderPaused}" />
+            <Button Classes="quiet" Content="刷新" Command="{Binding RefreshCommand}" shortcuts:MptShortcutHint.CommandId="input-monitor.ui.refresh" />
             <Button Classes="quiet" Content="清除数据" Command="{Binding ClearDataCommand}" />
           </StackPanel>
         </Grid>
@@ -163,10 +164,10 @@
             </Border>
           </StackPanel>
           <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" IsVisible="{Binding GrainIsDay}">
-            <Button Classes="seg" Content="‹" Command="{Binding PreviousDayCommand}" />
+            <Button Classes="seg" Content="‹" Command="{Binding PreviousDayCommand}" shortcuts:MptShortcutHint.CommandId="input-monitor.ui.previous-day" />
             <TextBlock Text="{Binding SelectedDateText}" VerticalAlignment="Center" FontSize="13" />
-            <Button Classes="seg" Content="›" Command="{Binding NextDayCommand}" IsEnabled="{Binding CanGoForward}" />
-            <Button Classes="quiet" Content="回到今天" Command="{Binding TodayCommand}" IsVisible="{Binding ShowBackToToday}" />
+            <Button Classes="seg" Content="›" Command="{Binding NextDayCommand}" shortcuts:MptShortcutHint.CommandId="input-monitor.ui.next-day" IsEnabled="{Binding CanGoForward}" />
+            <Button Classes="quiet" Content="回到今天" Command="{Binding TodayCommand}" shortcuts:MptShortcutHint.CommandId="input-monitor.ui.today" IsVisible="{Binding ShowBackToToday}" />
           </StackPanel>
           <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
             <TextBlock Text="应用类型" VerticalAlignment="Center" Foreground="{DynamicResource MptBrushTextSecondary}" FontSize="12" />
@@ -182,17 +183,17 @@
       </Border>
 
       <WrapPanel Margin="20,12,20,0" Orientation="Horizontal">
-        <Button Classes="quiet" Content="‹" Command="{Binding PreviousDayCommand}"
+        <Button Classes="quiet" Content="‹" Command="{Binding PreviousDayCommand}" shortcuts:MptShortcutHint.CommandId="input-monitor.ui.previous-day"
                 IsEnabled="{Binding CanGoBack}" ToolTip.Tip="{Binding PreviousPeriodLabel}"
                 AutomationProperties.Name="{Binding PreviousPeriodLabel}" />
         <TextBlock Text="{Binding SelectedDateText}" Margin="12,0" VerticalAlignment="Center" FontWeight="SemiBold" />
-        <Button Classes="quiet" Content="›" Command="{Binding NextDayCommand}"
+        <Button Classes="quiet" Content="›" Command="{Binding NextDayCommand}" shortcuts:MptShortcutHint.CommandId="input-monitor.ui.next-day"
                 IsEnabled="{Binding CanGoForward}" ToolTip.Tip="{Binding NextPeriodLabel}"
                 AutomationProperties.Name="{Binding NextPeriodLabel}" />
         <CalendarDatePicker x:Name="HistoryDatePicker" SelectedDate="{Binding SelectedDate, Mode=TwoWay}"
                             DisplayDateEnd="{Binding Today}" Width="160" Margin="12,0"
                             AutomationProperties.Name="选择历史日期" />
-        <Button Classes="quiet" Content="{Binding CurrentPeriodLabel}" Command="{Binding TodayCommand}"
+        <Button Classes="quiet" Content="{Binding CurrentPeriodLabel}" Command="{Binding TodayCommand}" shortcuts:MptShortcutHint.CommandId="input-monitor.ui.today"
                 IsVisible="{Binding ShowBackToToday}" />
       </WrapPanel>
 
