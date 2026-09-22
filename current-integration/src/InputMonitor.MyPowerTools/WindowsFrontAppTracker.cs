@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
@@ -110,6 +111,15 @@ internal sealed class WindowsFrontAppTracker : IFrontAppTracker
         {
             if (_current is { } session)
             {
+                // Protected-process / probe failures resolve as "unknown". Do not keep accruing
+                // usage on the previous resolved app — switch to the explicit unknown session.
+                if (ForegroundAppIdentity.MustLeaveResolvedSession(session.BundleId, probe.BundleId))
+                {
+                    EndCurrentLocked(now);
+                    _current = Begin(probe, now);
+                    return;
+                }
+
                 if (!string.Equals(session.BundleId, probe.BundleId, StringComparison.OrdinalIgnoreCase))
                 {
                     EndCurrentLocked(now);
@@ -182,22 +192,128 @@ internal sealed class WindowsFrontAppTracker : IFrontAppTracker
             return ("unknown", "Unknown", null);
         }
 
+        var title = ReadTitle(hwnd);
+        GetWindowThreadProcessId(hwnd, out var processId);
+        if (processId == 0)
+        {
+            var unresolved = ForegroundAppIdentity.Resolve(null, null, null, title);
+            return (unresolved.BundleId, unresolved.AppName, title);
+        }
+
+        var path = TryImagePath(processId);
+        if (path is not null && IsApplicationFrameHost(path))
+        {
+            var coreWindow = FindCoreWindow(hwnd);
+            if (coreWindow != 0)
+            {
+                GetWindowThreadProcessId(coreWindow, out var coreProcessId);
+                var corePath = coreProcessId == 0 ? null : TryImagePath(coreProcessId);
+                if (corePath is not null && !IsApplicationFrameHost(corePath))
+                {
+                    path = corePath;
+                }
+            }
+        }
+
+        string? description = null;
+        if (path is not null)
+        {
+            description = IsApplicationFrameHost(path) && !string.IsNullOrWhiteSpace(title)
+                ? title
+                : TryFileDescription(path);
+        }
+
+        var processName = path is null ? TryProcessName(processId) : null;
+        var identity = ForegroundAppIdentity.Resolve(path, description, processName, title);
+        return (identity.BundleId, identity.AppName, title);
+    }
+
+    private string? ReadTitle(nint hwnd)
+    {
+        if (_titleBuffer.Capacity < 1024)
+        {
+            _titleBuffer.Capacity = 1024;
+        }
+
         _titleBuffer.Clear();
         var length = GetWindowText(hwnd, _titleBuffer, _titleBuffer.Capacity);
-        var title = length > 0 ? _titleBuffer.ToString() : null;
-        GetWindowThreadProcessId(hwnd, out var processId);
+        return length > 0 ? _titleBuffer.ToString() : null;
+    }
+
+    private static bool IsApplicationFrameHost(string path) =>
+        string.Equals(Path.GetFileName(path), "ApplicationFrameHost.exe", StringComparison.OrdinalIgnoreCase);
+
+    private static string? TryImagePath(uint processId)
+    {
+        var handle = OpenProcess(ProcessQueryLimitedInformation, false, processId);
+        if (handle == 0)
+        {
+            return null;
+        }
+
         try
         {
-            using var process = System.Diagnostics.Process.GetProcessById((int)processId);
-            var name = process.ProcessName;
-            var path = process.MainModule?.FileName;
-            var bundle = string.IsNullOrWhiteSpace(path) ? name : Path.GetFileName(path);
-            return (bundle.ToLowerInvariant(), string.IsNullOrWhiteSpace(process.MainWindowTitle) ? name : process.ProcessName, title);
+            var buffer = new StringBuilder(1024);
+            var size = buffer.Capacity;
+            if (!QueryFullProcessImageName(handle, 0, buffer, ref size) || size <= 0)
+            {
+                return null;
+            }
+
+            var path = buffer.ToString();
+            return string.IsNullOrWhiteSpace(path) ? null : path;
         }
-        catch
+        finally
         {
-            return ("unknown", "Unknown", title);
+            CloseHandle(handle);
         }
+    }
+
+    private static string? TryProcessName(uint processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById((int)processId);
+            var name = process.ProcessName;
+            return string.IsNullOrWhiteSpace(name) ? null : name;
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string? TryFileDescription(string path)
+    {
+        try
+        {
+            var description = FileVersionInfo.GetVersionInfo(path).FileDescription;
+            return string.IsNullOrWhiteSpace(description) ? null : description.Trim();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static nint FindCoreWindow(nint parent)
+    {
+        nint found = 0;
+        EnumChildProc callback = (child, _) =>
+        {
+            var className = new StringBuilder(256);
+            if (GetClassName(child, className, className.Capacity) > 0 &&
+                string.Equals(className.ToString(), "Windows.UI.Core.CoreWindow", StringComparison.Ordinal))
+            {
+                found = child;
+                return false;
+            }
+
+            return true;
+        };
+        EnumChildWindows(parent, callback, 0);
+        GC.KeepAlive(callback);
+        return found;
     }
 
     private static bool IsWorkstationLocked()
@@ -212,8 +328,27 @@ internal sealed class WindowsFrontAppTracker : IFrontAppTracker
         return false;
     }
 
+    private const uint ProcessQueryLimitedInformation = 0x1000;
+
+    private delegate bool EnumChildProc(nint hwnd, nint lParam);
+
     [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(nint hWnd, StringBuilder lpClassName, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumChildWindows(nint hWndParent, EnumChildProc lpEnumFunc, nint lParam);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern nint OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool QueryFullProcessImageName(nint hProcess, int dwFlags, StringBuilder lpExeName, ref int lpdwSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(nint hObject);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowText(nint hWnd, StringBuilder lpString, int nMaxCount);
