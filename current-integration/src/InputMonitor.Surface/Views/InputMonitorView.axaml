@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:shortcuts="using:MyPowerTools.AvaloniaSdk"
+             xmlns:adaptive="using:MyPowerTools.AvaloniaSdk"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:InputMonitor.Surface.ViewModels"
              xmlns:ctrl="using:InputMonitor.Surface.Controls"
@@ -71,13 +72,13 @@
   <ScrollViewer>
     <StackPanel Spacing="0">
       <Border Padding="20,12" Background="{DynamicResource MptBrushAppBackground}">
-        <Grid ColumnDefinitions="*,Auto">
-          <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+        <Grid adaptive:MptAdaptiveLayout.StackBelow="600" ColumnDefinitions="*,Auto">
+          <StackPanel adaptive:MptAdaptiveLayout.StackBelow="480" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
             <TextBlock Text="{Binding FatigueText}" FontSize="13" Foreground="{DynamicResource MptBrushTextSecondary}" />
             <TextBlock Text="{Binding FrontAppText}" FontSize="13" Foreground="{DynamicResource MptBrushTextSecondary}" />
             <TextBlock Text="{Binding StatusText}" FontSize="13" Foreground="{DynamicResource MptBrushTextSecondary}" />
           </StackPanel>
-          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+          <StackPanel adaptive:MptAdaptiveLayout.StackBelow="480" Grid.Column="1" Orientation="Horizontal" Spacing="8">
             <Button Classes="quiet" Content="开始休息" Command="{Binding RestCommand}" shortcuts:MptShortcutHint.CommandId="input-monitor.ui.rest" />
             <Button Classes="quiet" Content="{Binding PauseLabel}" Command="{Binding PauseCommand}" shortcuts:MptShortcutHint.CommandId="input-monitor.ui.pause" Classes.paused="{Binding IsReminderPaused}" />
             <Button Classes="quiet" Content="刷新" Command="{Binding RefreshCommand}" shortcuts:MptShortcutHint.CommandId="input-monitor.ui.refresh" />
@@ -87,9 +88,9 @@
       </Border>
 
       <Border Padding="20,8,20,16" Background="{DynamicResource MptBrushAppBackground}">
-        <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="16">
+        <Grid adaptive:MptAdaptiveLayout.StackBelow="600" ColumnDefinitions="*,*,*,*" ColumnSpacing="16">
           <Border Classes="dashboardCard" Padding="16,14" MinHeight="78">
-            <StackPanel Orientation="Horizontal" Spacing="14">
+            <StackPanel adaptive:MptAdaptiveLayout.StackBelow="480" Orientation="Horizontal" Spacing="14">
               <Border Classes="iconTile" Background="{DynamicResource MptBrushAccent}">
                 <TextBlock Text="键" Foreground="{DynamicResource MptBrushAccentText}" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
               </Border>
@@ -101,7 +102,7 @@
             </StackPanel>
           </Border>
           <Border Grid.Column="1" Classes="dashboardCard" Padding="16,14" MinHeight="78">
-            <StackPanel Orientation="Horizontal" Spacing="14">
+            <StackPanel adaptive:MptAdaptiveLayout.StackBelow="480" Orientation="Horizontal" Spacing="14">
               <Border Classes="iconTile" Background="{DynamicResource MptBrushAccent}">
                 <TextBlock Text="鼠" Foreground="{DynamicResource MptBrushAccentText}" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
               </Border>
@@ -113,7 +114,7 @@
             </StackPanel>
           </Border>
           <Border Grid.Column="2" Classes="dashboardCard" Padding="16,14" MinHeight="78">
-            <StackPanel Orientation="Horizontal" Spacing="14">
+            <StackPanel adaptive:MptAdaptiveLayout.StackBelow="480" Orientation="Horizontal" Spacing="14">
               <Border Classes="iconTile" Background="{DynamicResource MptBrushAccent}">
                 <TextBlock Text="窗" Foreground="{DynamicResource MptBrushAccentText}" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
               </Border>
@@ -125,7 +126,7 @@
             </StackPanel>
           </Border>
           <Border Grid.Column="3" Classes="dashboardCard" Padding="16,14" MinHeight="78">
-            <StackPanel Orientation="Horizontal" Spacing="14">
+            <StackPanel adaptive:MptAdaptiveLayout.StackBelow="480" Orientation="Horizontal" Spacing="14">
               <Border Classes="iconTile" Background="{DynamicResource MptBrushAccent}">
                 <TextBlock Text="时" Foreground="{DynamicResource MptBrushAccentText}" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
               </Border>
@@ -140,11 +141,11 @@
       </Border>
 
       <Border Background="{DynamicResource MptBrushCardBackground}" BorderBrush="{DynamicResource MptBrushBorder}" BorderThickness="0,1" Padding="20,12">
-        <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="16">
-          <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+        <Grid adaptive:MptAdaptiveLayout.StackBelow="600" ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="16">
+          <StackPanel adaptive:MptAdaptiveLayout.StackBelow="480" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
             <TextBlock Text="粒度" VerticalAlignment="Center" Foreground="{DynamicResource MptBrushTextSecondary}" FontSize="12" />
             <Border Classes="segmentGroup">
-              <StackPanel Orientation="Horizontal" Spacing="2">
+              <StackPanel adaptive:MptAdaptiveLayout.StackBelow="480" Orientation="Horizontal" Spacing="2">
                 <Button Classes="seg" Content="日" Command="{Binding SelectGrainCommand}" CommandParameter="day" Classes.selected="{Binding GrainIsDay}" />
                 <Button Classes="seg" Content="月" Command="{Binding SelectGrainCommand}" CommandParameter="month" Classes.selected="{Binding GrainIsMonth}" />
                 <Button Classes="seg" Content="季" Command="{Binding SelectGrainCommand}" CommandParameter="quarter" Classes.selected="{Binding GrainIsQuarter}" />
@@ -152,10 +153,10 @@
               </StackPanel>
             </Border>
           </StackPanel>
-          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <StackPanel adaptive:MptAdaptiveLayout.StackBelow="480" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
             <TextBlock Text="维度" VerticalAlignment="Center" Foreground="{DynamicResource MptBrushTextSecondary}" FontSize="12" />
             <Border Classes="segmentGroup">
-              <StackPanel Orientation="Horizontal" Spacing="2">
+              <StackPanel adaptive:MptAdaptiveLayout.StackBelow="480" Orientation="Horizontal" Spacing="2">
                 <Button Classes="seg" Content="所有" Command="{Binding SelectDimensionCommand}" CommandParameter="all" Classes.selected="{Binding DimensionIsAll}" />
                 <Button Classes="seg" Content="键盘" Command="{Binding SelectDimensionCommand}" CommandParameter="keyboard" Classes.selected="{Binding DimensionIsKeyboard}" />
                 <Button Classes="seg" Content="鼠标" Command="{Binding SelectDimensionCommand}" CommandParameter="mouse" Classes.selected="{Binding DimensionIsMouse}" />
@@ -163,13 +164,13 @@
               </StackPanel>
             </Border>
           </StackPanel>
-          <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" IsVisible="{Binding GrainIsDay}">
+          <StackPanel adaptive:MptAdaptiveLayout.StackBelow="480" Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" IsVisible="{Binding GrainIsDay}">
             <Button Classes="seg" Content="‹" Command="{Binding PreviousDayCommand}" shortcuts:MptShortcutHint.CommandId="input-monitor.ui.previous-day" />
             <TextBlock Text="{Binding SelectedDateText}" VerticalAlignment="Center" FontSize="13" />
             <Button Classes="seg" Content="›" Command="{Binding NextDayCommand}" shortcuts:MptShortcutHint.CommandId="input-monitor.ui.next-day" IsEnabled="{Binding CanGoForward}" />
             <Button Classes="quiet" Content="回到今天" Command="{Binding TodayCommand}" shortcuts:MptShortcutHint.CommandId="input-monitor.ui.today" IsVisible="{Binding ShowBackToToday}" />
           </StackPanel>
-          <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <StackPanel adaptive:MptAdaptiveLayout.StackBelow="480" Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
             <TextBlock Text="应用类型" VerticalAlignment="Center" Foreground="{DynamicResource MptBrushTextSecondary}" FontSize="12" />
             <ComboBox Width="130" ItemsSource="{Binding Categories}" SelectedItem="{Binding SelectedCategory}">
               <ComboBox.ItemTemplate>
@@ -272,7 +273,7 @@
             <ItemsControl ItemsSource="{Binding KeyHeat}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="vm:KeyHeatRow">
-                  <Grid ColumnDefinitions="72,*,52" Margin="0,3" ColumnSpacing="10">
+                  <Grid adaptive:MptAdaptiveLayout.ColumnLabels="按键|热区|次数" adaptive:MptAdaptiveLayout.StackBelow="600" ColumnDefinitions="72,*,52" Margin="0,3" ColumnSpacing="10">
                     <TextBlock Text="{Binding Label}" FontSize="11" FontFamily="Consolas" VerticalAlignment="Center" />
                     <ctrl:RatioBar Grid.Column="1" Height="12" Ratio="{Binding Ratio}" />
                     <TextBlock Grid.Column="2" Text="{Binding Count}" FontSize="11" Foreground="{DynamicResource MptBrushTextSecondary}" HorizontalAlignment="Right" VerticalAlignment="Center" />
@@ -290,7 +291,7 @@
             <ItemsControl ItemsSource="{Binding CategoryRows}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="vm:CategoryBreakdownRow">
-                  <Grid ColumnDefinitions="Auto,*,Auto,48" Margin="0,4" ColumnSpacing="8">
+                  <Grid adaptive:MptAdaptiveLayout.ColumnLabels="类型|类别|时长|占比" adaptive:MptAdaptiveLayout.StackBelow="600" ColumnDefinitions="Auto,*,Auto,48" Margin="0,4" ColumnSpacing="8">
                     <Ellipse Width="8" Height="8" Fill="{Binding Swatch}" VerticalAlignment="Center" />
                     <TextBlock Grid.Column="1" Text="{Binding Category}" FontSize="12" />
                     <TextBlock Grid.Column="2" Text="{Binding Duration}" FontSize="11" Foreground="{DynamicResource MptBrushTextSecondary}" />
@@ -308,7 +309,7 @@
             <ItemsControl ItemsSource="{Binding Apps}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="vm:AppUsageRow">
-                  <Grid ColumnDefinitions="160,Auto,*,72" Margin="0,4" ColumnSpacing="10">
+                  <Grid adaptive:MptAdaptiveLayout.ColumnLabels="应用|类别|使用占比|时长" adaptive:MptAdaptiveLayout.StackBelow="600" ColumnDefinitions="160,Auto,*,72" Margin="0,4" ColumnSpacing="10">
                     <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="Medium" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                     <Border Grid.Column="1" Background="{DynamicResource MptBrushSurfaceMuted}" CornerRadius="8" Padding="6,2" VerticalAlignment="Center">
                       <TextBlock Text="{Binding Category}" FontSize="10" Foreground="{DynamicResource MptBrushTextSecondary}" />
