@@ -60,6 +60,10 @@ public sealed class InputMonitorHost : IDisposable
             OnShouldRemind = ShowRest,
             OnChanged = MarkFatigueStateDirty
         };
+        if (_fatigue.SanitizedPersistedValue)
+        {
+            PersistSettings();
+        }
         _capture = capture;
         _frontApp = frontApp;
         _overlay = overlay;
@@ -132,6 +136,7 @@ public sealed class InputMonitorHost : IDisposable
         }
 
         _running = false;
+        _overlay?.Dismiss();
         _capture?.Stop();
         _frontApp?.Stop();
         _drainTimer.Change(Timeout.Infinite, Timeout.Infinite);
@@ -145,6 +150,16 @@ public sealed class InputMonitorHost : IDisposable
         Drain();
         _consumer?.Join(TimeSpan.FromSeconds(2));
         _consumer = null;
+    }
+
+    /// <summary>
+    /// Skips the current rest break and dismisses the overlay. Dismiss alone does not call
+    /// <see cref="FatigueEngine.Skip"/>, so this is the command path that keeps both in sync.
+    /// </summary>
+    public void SkipRest()
+    {
+        _fatigue.Skip();
+        _overlay?.Dismiss();
     }
 
     /// <summary>

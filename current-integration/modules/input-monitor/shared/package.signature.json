@@ -3,7 +3,7 @@
   "PackageId": "input-monitor",
   "Version": "0.1.3",
   "HashManifest": "shared/package.hashes.json",
-  "HashManifestSha256": "54dc0d21f1410bf816954d8b7e370750cc18f32ac4c66b86c77afae0d6b05edf",
+  "HashManifestSha256": "a2761368084da11f3b0aed1e6367c8eba081998f62920d215468dbca3b1c15c1",
   "SignatureState": "unsigned-local-trust",
   "Algorithm": "sha256-manifest-local",
   "KeyId": "local-development",

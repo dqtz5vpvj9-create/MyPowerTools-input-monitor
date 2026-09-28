@@ -149,7 +149,7 @@ public sealed class InputMonitorModule : IMptModule, IMptModuleLifecycle
 
             if (string.Equals(request.CommandId, "input-monitor.skip", StringComparison.OrdinalIgnoreCase))
             {
-                host.Fatigue.Skip();
+                host.SkipRest();
                 return Ok(request, JsonSerializer.Serialize(host.Snapshot(), JsonOptions));
             }
 
@@ -287,9 +287,19 @@ public sealed class InputMonitorModule : IMptModule, IMptModuleLifecycle
         _host ?? throw new InvalidOperationException("Input Monitor has not been initialized.");
 
     [SupportedOSPlatform("windows")]
-    private static (IInputCapture Capture, IFrontAppTracker Tracker, IRestOverlay Overlay) CreateWindowsCapture(
-        AppCategoryMap categories) =>
-        (new WindowsInputCapture(), new WindowsFrontAppTracker(categories), new WindowsRestOverlay());
+    private (IInputCapture Capture, IFrontAppTracker Tracker, IRestOverlay Overlay) CreateWindowsCapture(
+        AppCategoryMap categories)
+    {
+        var overlay = new WindowsRestOverlay();
+        overlay.BindCompletionSound(() =>
+        {
+            var settings = _host?.Settings;
+            return settings is null
+                ? new RestCompletionSound(false, "Asterisk", 0)
+                : new RestCompletionSound(settings.SoundEnabled, settings.SoundName, settings.SoundVolume);
+        });
+        return (new WindowsInputCapture(), new WindowsFrontAppTracker(categories), overlay);
+    }
 
     private static bool SuppressLiveCapture()
     {
