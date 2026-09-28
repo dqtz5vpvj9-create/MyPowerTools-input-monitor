@@ -41,12 +41,18 @@ internal sealed class WindowsRestOverlay : IRestOverlay
     private const uint DtCenter = 0x00000001;
     private const uint DtVcenter = 0x00000004;
     private const uint DtSingleLine = 0x00000020;
-    private const uint ColorIcon = 0x00E65C5E;
-    private const uint ColorTitle = 0x00404040;
-    private const uint ColorTime = 0x00262626;
-    private const uint ColorSubtitle = 0x008C8C8C;
-    private const uint ColorButtonFill = 0x00F0F0F0;
-    private const uint ColorButtonText = 0x00666666;
+    // A rest reminder must not be the brightest thing on the desk. The previous palette was an
+    // 85%-opaque pure white sheet with dark text, which is glaring on a large high-DPI display and
+    // works against the point of resting your eyes. These are low-luminance equivalents.
+    // COLORREF is 0x00BBGGRR.
+    private const uint ColorBackground = 0x00161616;
+    private const uint ColorIcon = 0x004880B0;
+    private const uint ColorTitle = 0x00E6E6E6;
+    private const uint ColorTime = 0x00F5F5F5;
+    private const uint ColorSubtitle = 0x009E9E9E;
+    private const uint ColorButtonFill = 0x00262626;
+    private const uint ColorButtonBorder = 0x00454545;
+    private const uint ColorButtonText = 0x00D6D6D6;
     private const uint SndAlias = 0x00010000;
     private const uint SndAsync = 0x0001;
     private const uint SndNoDefault = 0x0002;
@@ -440,7 +446,10 @@ internal sealed class WindowsRestOverlay : IRestOverlay
             return;
         }
 
-        var brush = CreateSolidBrush(0x00FFFFFF);
+        // The class brush is what Windows erases the window with, so it has to match the
+        // painted background; a white class brush kept flashing a glaring sheet behind the
+        // paint even after the fill colour was toned down.
+        var brush = CreateSolidBrush(ColorBackground);
         var wndClass = new WndClassEx
         {
             CbSize = (uint)Marshal.SizeOf<WndClassEx>(),
@@ -510,7 +519,7 @@ internal sealed class WindowsRestOverlay : IRestOverlay
 
             var width = Math.Max(1, client.Right - client.Left);
             var height = Math.Max(1, client.Bottom - client.Top);
-            var background = CreateSolidBrush(0x00FFFFFF);
+            var background = CreateSolidBrush(ColorBackground);
             FillRect(dc, ref client, background);
             DeleteObject(background);
             SetBkMode(dc, Transparent);
@@ -565,13 +574,13 @@ internal sealed class WindowsRestOverlay : IRestOverlay
         DeleteObject(brush);
 
         var glyph = Math.Max(18, (int)Math.Round(32 * scale));
-        DrawTextLine(dc, "\u2615", "Segoe UI Symbol", glyph, FwNormal, 0x00FFFFFF, rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
+        DrawTextLine(dc, "\u2615", "Segoe UI Symbol", glyph, FwNormal, ColorBackground, rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
     }
 
     private static void DrawSkipButton(nint dc, Rect rect, float scale)
     {
         var brush = CreateSolidBrush(ColorButtonFill);
-        var pen = CreatePen(0, Math.Max(1, (int)Math.Round(scale)), ColorButtonFill);
+        var pen = CreatePen(0, Math.Max(1, (int)Math.Round(scale)), ColorButtonBorder);
         var previousBrush = SelectObject(dc, brush);
         var previousPen = SelectObject(dc, pen);
         var radius = Math.Max(8, rect.Bottom - rect.Top);
