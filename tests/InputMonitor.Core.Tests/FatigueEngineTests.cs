@@ -3,13 +3,7 @@ using InputMonitor.Core;
 namespace InputMonitor.Core.Tests;
 
 /// <summary>
-/// Pins the fatigue state machine restored from the Windows branch (commit 72b166b).
-///
-/// Note for reviewers: this is the <em>merged</em> semantics. The parent-repo test
-/// <c>MyPowerTools.Tests.InputMonitorProductTests.Fatigue_skip_raises_the_threshold_and_rest_done_resets</c>
-/// still asserts the previous contract (Skip -&gt; Value 100 / Threshold 120, the removed
-/// <c>SkipThreshold</c>); that test needs updating with the parent repo, because Skip here intentionally
-/// starts a new full interval (72b166b: “skipping or finishing a rest starts a new full interval”).
+/// Covers active-time accrual and starting a full reminder interval after skipping or resting.
 /// </summary>
 public sealed class FatigueEngineTests
 {
