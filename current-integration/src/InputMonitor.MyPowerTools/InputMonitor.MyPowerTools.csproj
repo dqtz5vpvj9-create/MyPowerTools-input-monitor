@@ -15,7 +15,7 @@
   <ItemGroup>
     <PackageReference Include="MyPowerTools.ToolSdk" Version="0.2.0" />
     <PackageReference Include="MyPowerTools.Protocol" Version="0.2.0" />
-    <PackageReference Include="MyPowerTools.Platform.Abstractions" Version="0.2.1" />
+    <PackageReference Include="MyPowerTools.Platform.Abstractions" Version="0.3.0" />
     <ProjectReference Include="..\InputMonitor.Core\InputMonitor.Core.csproj" />
   </ItemGroup>
 
