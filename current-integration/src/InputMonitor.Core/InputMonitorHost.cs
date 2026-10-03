@@ -146,10 +146,12 @@ public sealed class InputMonitorHost : IDisposable
             _lifetime.Cancel();
         }
 
+        // Capture and tracker have stopped producing. Finish every accepted
+        // event before flushing so shutdown cannot discard or replay the tail.
+        _consumer?.Join();
+        _consumer = null;
         _buffer.Flush();
         Drain();
-        _consumer?.Join(TimeSpan.FromSeconds(2));
-        _consumer = null;
     }
 
     /// <summary>
@@ -280,7 +282,7 @@ public sealed class InputMonitorHost : IDisposable
 
     private void Consume()
     {
-        while (!_lifetime.IsCancellationRequested)
+        while (!_lifetime.IsCancellationRequested || !_events.IsEmpty)
         {
             if (!_events.TryDequeue(out var record))
             {
