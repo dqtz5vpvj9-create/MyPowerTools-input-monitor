@@ -26,7 +26,7 @@ internal sealed class WindowsFrontAppTracker : IFrontAppTracker
 
     public event Action<FrontAppSession>? SessionCompleted;
     public event Action<FrontAppSession, DateTimeOffset>? Heartbeat;
-    public bool ScreenLocked => _screenLocked;
+    public bool ScreenLocked => IsWorkstationLocked();
 
     public FrontAppSession? CurrentSession
     {

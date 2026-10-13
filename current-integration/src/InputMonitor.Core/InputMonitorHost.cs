@@ -85,7 +85,6 @@ public sealed class InputMonitorHost : IDisposable
             };
             _frontApp.Heartbeat += (_, _) =>
             {
-                _fatigue.NotifyActivity(FatigueActivitySource.App);
                 _aggregator.ProcessAppHeartbeat(
                     TimeSpan.FromSeconds(Settings.AppHeartbeatSeconds),
                     DateTimeOffset.Now,
@@ -94,7 +93,7 @@ public sealed class InputMonitorHost : IDisposable
         }
 
         _drainTimer = new Timer(_ => Drain(), null, Timeout.Infinite, Timeout.Infinite);
-        _fatigueTimer = new Timer(_ => _fatigue.Tick(DateTimeOffset.Now), null, Timeout.Infinite, Timeout.Infinite);
+        _fatigueTimer = new Timer(_ => _fatigue.Tick(DateTimeOffset.Now, _frontApp?.ScreenLocked ?? false), null, Timeout.Infinite, Timeout.Infinite);
         _repository.PurgeExpiredData(Settings.DataRetentionDays);
     }
 

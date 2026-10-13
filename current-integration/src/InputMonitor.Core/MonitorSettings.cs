@@ -13,18 +13,20 @@ public sealed class MonitorSettings
     public int RestDurationSeconds { get; set; } = DefaultRestDurationSeconds;
     public bool FatigueFromKeyboard { get; set; } = true;
     public bool FatigueFromMouse { get; set; } = true;
-    public bool FatigueFromApp { get; set; } = true;
+    public bool FatigueFromApp { get; set; }
     public bool SoundEnabled { get; set; } = true;
     public double SoundVolume { get; set; } = DefaultSoundVolume;
     public string SoundName { get; set; } = "Asterisk";
     public bool PrivacyMode { get; set; } = true;
     public double TrackSampleDistance { get; set; } = DefaultTrackSampleDistance;
     public double AppHeartbeatSeconds { get; set; } = DefaultAppHeartbeatSeconds;
-    public bool RemindAfterResume { get; set; } = true;
+    public bool RemindAfterResume { get; set; }
     public bool LaunchAtLogin { get; set; }
     public int DataRetentionDays { get; set; } = DefaultDataRetentionDays;
     public double FatigueValue { get; set; }
     public double FatigueThreshold { get; set; } = 100;
+    public DateTimeOffset? FatigueLastActivity { get; set; }
+    public double FatiguePendingIdlePoints { get; set; }
     public bool FatigueIsPaused { get; set; }
     public Dictionary<string, AppCategory> CategoryOverrides { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -61,6 +63,8 @@ public sealed class MonitorSettings
             RemindAfterResume = RemindAfterResume,
             LaunchAtLogin = LaunchAtLogin,
             DataRetentionDays = DataRetentionDays,
+            FatigueLastActivity = FatigueLastActivity,
+            FatiguePendingIdlePoints = FatiguePendingIdlePoints,
             FatigueValue = FatigueValue,
             FatigueThreshold = FatigueThreshold,
             FatigueIsPaused = FatigueIsPaused,
