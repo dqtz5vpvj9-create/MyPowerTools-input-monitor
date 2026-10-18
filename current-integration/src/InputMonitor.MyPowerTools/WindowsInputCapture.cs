@@ -37,6 +37,7 @@ internal sealed class WindowsInputCapture : IInputCapture
 
     public event Action<InputEventRecord>? EventReceived;
     public bool IsRunning => _running;
+    public bool HookInstallFailed { get; private set; }
 
     public void Start()
     {
@@ -95,7 +96,20 @@ internal sealed class WindowsInputCapture : IInputCapture
         _mouseProc = Marshal.GetFunctionPointerForDelegate(_mouseCallback);
         var module = HookModuleHandle(_keyboardProc);
         _keyboardHook = SetWindowsHookEx(WhKeyboardLl, _keyboardProc, module, 0);
+        if (_keyboardHook == 0)
+        {
+            var error = Marshal.GetLastWin32Error();
+            Trace.WriteLine($"InputMonitor: SetWindowsHookEx failed for keyboard hook (WH_KEYBOARD_LL). Win32 error: {error}");
+            HookInstallFailed = true;
+        }
+
         _mouseHook = SetWindowsHookEx(WhMouseLl, _mouseProc, module, 0);
+        if (_mouseHook == 0)
+        {
+            var error = Marshal.GetLastWin32Error();
+            Trace.WriteLine($"InputMonitor: SetWindowsHookEx failed for mouse hook (WH_MOUSE_LL). Win32 error: {error}");
+            HookInstallFailed = true;
+        }
 
         var poller = new Timer(_ => PollCursor(), null, TimeSpan.FromMilliseconds(33), TimeSpan.FromMilliseconds(33));
         try

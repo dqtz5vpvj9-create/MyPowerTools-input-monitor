@@ -108,7 +108,8 @@ public sealed record InputEventRecord(
     ulong Modifiers,
     long ScrollDelta,
     bool IsAutoRepeat,
-    double MoveDelta);
+    double MoveDelta,
+    string? KeyBucket = null);
 
 public sealed class FrontAppSession
 {

@@ -19,7 +19,8 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
     private readonly ParamCommand _selectDimension;
     private string _grain = "day";
     private string _dimension = "mouse";
-    private DateTime _selectedDate = DateTime.Today;
+    private readonly Func<DateTime> _today;
+    private DateTime _selectedDate;
     private string _statusText = "正在读取…";
     private string _fatigueText = "疲劳 0%";
     private string _frontAppText = "前台应用：—";
@@ -35,6 +36,7 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
     private string _frequencyUnit = "次按键";
     private string _heatValueKind = "count";
     private bool _paused;
+    private bool _captureRunning;
     private bool _showKeyboard;
     private bool _showMouse = true;
     private bool _showApps;
@@ -53,10 +55,12 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
     private string _weekAlignedStart = "";
     private CategoryOption? _selectedCategory;
 
-    public InputMonitorViewModel(MptAvaloniaSurfaceContext context)
+    public InputMonitorViewModel(MptAvaloniaSurfaceContext context, Func<DateTime>? today = null)
         : base("Input Monitor", "本机键盘、鼠标与前台窗口活动统计，并按连续活动提醒休息", ToolSurfaceState.Loading)
     {
         _context = context;
+        _today = today ?? (() => DateTime.Today);
+        _selectedDate = Today;
         Categories =
         [
             new CategoryOption("", "全部类型"),
@@ -81,12 +85,14 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
         });
         RestCommand = new MptAsyncRelayCommand(() => RunAsync("input-monitor.rest"), null, "InputMonitorRest");
         PauseCommand = new MptAsyncRelayCommand(TogglePauseAsync, null, "InputMonitorPause");
+        CaptureToggleCommand = new MptAsyncRelayCommand(ToggleCaptureAsync, null, "InputMonitorCaptureToggle");
+        ClearDataCommand = new MptAsyncRelayCommand(ClearDataAsync, null, "InputMonitorClearData");
         RefreshCommand = new MptAsyncRelayCommand(() => RefreshAsync(_lifetime.Token), null, "InputMonitorRefresh");
         PreviousDayCommand = new ParamCommand(_ => ShiftDay(-1));
         NextDayCommand = new ParamCommand(_ => ShiftDay(1));
         TodayCommand = new ParamCommand(unused =>
         {
-            _selectedDate = DateTime.Today;
+            _selectedDate = Today;
             NotifyDate();
             _ = RefreshAsync(_lifetime.Token);
         });
@@ -112,6 +118,8 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
     public ICommand SelectDimensionCommand => _selectDimension;
     public ICommand RestCommand { get; }
     public ICommand PauseCommand { get; }
+    public ICommand CaptureToggleCommand { get; }
+    public ICommand ClearDataCommand { get; }
     public ICommand RefreshCommand { get; }
     public ICommand PreviousDayCommand { get; }
     public ICommand NextDayCommand { get; }
@@ -128,7 +136,7 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
                 OnPropertyChanged(nameof(GrainIsMonth));
                 OnPropertyChanged(nameof(GrainIsQuarter));
                 OnPropertyChanged(nameof(GrainIsYear));
-                OnPropertyChanged(nameof(ShowBackToToday));
+                NotifyDate();
             }
         }
     }
@@ -156,10 +164,29 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
     public bool DimensionIsKeyboard => Dimension == "keyboard";
     public bool DimensionIsMouse => Dimension == "mouse";
     public bool DimensionIsApp => Dimension == "app";
-    public bool IsSelectedToday => _selectedDate.Date == DateTime.Today;
-    public bool ShowBackToToday => GrainIsDay && !IsSelectedToday;
-    public bool CanGoForward => _selectedDate.Date < DateTime.Today;
-    public string SelectedDateText => _selectedDate.ToString("yyyy/M/d", CultureInfo.CurrentCulture);
+    public DateTime Today => _today().Date;
+    public bool IsSelectedToday => _selectedDate.Date == Today;
+    public bool ShowBackToToday => HistoryPeriod.Start(_selectedDate, Grain) != HistoryPeriod.Start(Today, Grain);
+    public bool CanGoForward => HistoryPeriod.Start(_selectedDate, Grain) < HistoryPeriod.Start(Today, Grain);
+    public bool CanGoBack => HistoryPeriod.Start(_selectedDate, Grain) > DateTime.MinValue;
+    public string SelectedDateText => HistoryPeriod.Label(_selectedDate, Grain);
+    public string CurrentPeriodLabel => Grain switch { "month" => "回到本月", "quarter" => "回到本季度", "year" => "回到今年", _ => "回到今天" };
+    public string PreviousPeriodLabel => Grain switch { "month" => "上个月", "quarter" => "上一季度", "year" => "上一年", _ => "前一天" };
+    public string NextPeriodLabel => Grain switch { "month" => "下个月", "quarter" => "下一季度", "year" => "下一年", _ => "后一天" };
+
+    public DateTime? SelectedDate
+    {
+        get => _selectedDate;
+        set
+        {
+            if (value is not { } date) return;
+            date = date.Date > Today ? Today : date.Date;
+            if (date == _selectedDate) return;
+            _selectedDate = date;
+            NotifyDate();
+            _ = RefreshAsync(_lifetime.Token);
+        }
+    }
 
     public CategoryOption? SelectedCategory
     {
@@ -189,6 +216,8 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
     public string HeatValueKind { get => _heatValueKind; private set => SetProperty(ref _heatValueKind, value); }
     public string PauseLabel => _paused ? "恢复提醒" : "暂停提醒";
     public bool IsReminderPaused => _paused;
+    public string CaptureToggleLabel => _captureRunning ? "停止采集" : "恢复采集";
+    public bool IsCaptureRunning => _captureRunning;
     public bool ShowKeyboard { get => _showKeyboard; private set => SetProperty(ref _showKeyboard, value); }
     public bool ShowMouse { get => _showMouse; private set => SetProperty(ref _showMouse, value); }
     public bool ShowApps { get => _showApps; private set => SetProperty(ref _showApps, value); }
@@ -222,11 +251,8 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
 
     private void ShiftDay(int delta)
     {
-        var next = _selectedDate.Date.AddDays(delta);
-        if (next > DateTime.Today)
-        {
-            return;
-        }
+        if (delta < 0 && !CanGoBack || delta > 0 && !CanGoForward) return;
+        var next = HistoryPeriod.Shift(_selectedDate, Grain, delta);
 
         _selectedDate = next;
         NotifyDate();
@@ -236,9 +262,73 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
     private void NotifyDate()
     {
         OnPropertyChanged(nameof(SelectedDateText));
+        OnPropertyChanged(nameof(SelectedDate));
+        OnPropertyChanged(nameof(Today));
+        OnPropertyChanged(nameof(CurrentPeriodLabel));
+        OnPropertyChanged(nameof(PreviousPeriodLabel));
+        OnPropertyChanged(nameof(NextPeriodLabel));
+        OnPropertyChanged(nameof(CanGoBack));
         OnPropertyChanged(nameof(IsSelectedToday));
         OnPropertyChanged(nameof(CanGoForward));
         OnPropertyChanged(nameof(ShowBackToToday));
+    }
+
+    private async Task ToggleCaptureAsync()
+    {
+        var next = !_captureRunning;
+        await RunOnUiAsync(() => SetCaptureUi(next, next ? "正在恢复采集…" : "正在停止采集…"))
+            .ConfigureAwait(false);
+
+        try
+        {
+            var response = await ExecuteAsync(
+                    "input-monitor.capture",
+                    new JsonObject { ["running"] = next },
+                    _lifetime.Token)
+                .ConfigureAwait(false);
+            if (!response.Success)
+            {
+                throw new InvalidOperationException(response.Error?.Message ?? "切换采集状态失败。");
+            }
+
+            await RunOnUiAsync(() => SetCaptureUi(
+                    next,
+                    next ? "已恢复数据采集" : "已停止数据采集，不再记录输入活动"))
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await RunOnUiAsync(() => SetCaptureUi(!next, exception.Message)).ConfigureAwait(false);
+        }
+    }
+
+    private async Task ClearDataAsync()
+    {
+        await RunOnUiAsync(() => StatusText = "正在清除采集数据…").ConfigureAwait(false);
+        try
+        {
+            var response = await ExecuteAsync("input-monitor.data.clear", new JsonObject(), _lifetime.Token)
+                .ConfigureAwait(false);
+            if (!response.Success)
+            {
+                throw new InvalidOperationException(response.Error?.Message ?? "清除数据失败。");
+            }
+
+            await RefreshAsync(_lifetime.Token).ConfigureAwait(false);
+            await RunOnUiAsync(() => StatusText = "已清除全部采集数据").ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await RunOnUiAsync(() => StatusText = exception.Message).ConfigureAwait(false);
+        }
+    }
+
+    private void SetCaptureUi(bool running, string status)
+    {
+        _captureRunning = running;
+        OnPropertyChanged(nameof(CaptureToggleLabel));
+        OnPropertyChanged(nameof(IsCaptureRunning));
+        StatusText = status;
     }
 
     private async Task TogglePauseAsync()
@@ -362,6 +452,9 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
         FatigueText = $"疲劳 {fatigue.GetProperty("percentage").GetInt32()}%";
         FrontAppText = $"前台应用：{snapshot.GetProperty("frontAppName").GetString() ?? "—"}";
         var capturing = snapshot.GetProperty("captureRunning").GetBoolean();
+        _captureRunning = capturing;
+        OnPropertyChanged(nameof(CaptureToggleLabel));
+        OnPropertyChanged(nameof(IsCaptureRunning));
         StatusText = capturing
             ? (_paused ? "正在采集本机输入 · 提醒已暂停" : "正在采集本机输入")
             : "采集未运行";

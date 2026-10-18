@@ -17,7 +17,7 @@ public sealed class MonitorSettings
     public bool SoundEnabled { get; set; } = true;
     public double SoundVolume { get; set; } = DefaultSoundVolume;
     public string SoundName { get; set; } = "Asterisk";
-    public bool PrivacyMode { get; set; }
+    public bool PrivacyMode { get; set; } = true;
     public double TrackSampleDistance { get; set; } = DefaultTrackSampleDistance;
     public double AppHeartbeatSeconds { get; set; } = DefaultAppHeartbeatSeconds;
     public bool RemindAfterResume { get; set; } = true;

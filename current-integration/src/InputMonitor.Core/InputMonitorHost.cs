@@ -1,6 +1,7 @@
-using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Channels;
 
 namespace InputMonitor.Core;
 
@@ -19,17 +20,26 @@ public sealed class InputMonitorHost : IDisposable
     private readonly MetricsAggregator _aggregator;
     private readonly EventBuffer _buffer;
     private readonly FatigueEngine _fatigue;
-    private readonly ConcurrentQueue<InputEventRecord> _events = new();
+    private readonly Channel<InputEventRecord> _events = Channel.CreateUnbounded<InputEventRecord>();
     private readonly IInputCapture? _capture;
     private readonly IFrontAppTracker? _frontApp;
     private readonly IRestOverlay? _overlay;
     private readonly Timer _drainTimer;
     private readonly Timer _fatigueTimer;
     private readonly object _settingsGate = new();
+    private readonly object _lifecycleGate = new();
+    // Admission never takes the collection/database gate on native hook threads.
+    private readonly object _admissionGate = new();
+    private bool _acceptingEvents;
+    // This gate covers collection, pending batch delivery, aggregate persistence,
+    // and clearing. Never call capture/tracker lifecycle methods or getters under it.
+    private readonly object _collectionGate = new();
     private CancellationTokenSource _lifetime = new();
+    private int _fatigueStateDirty;
     private Thread? _consumer;
-    private bool _running;
+    private volatile bool _running;
     private bool _disposed;
+    private bool _collectionClosed;
 
     public MonitorSettings Settings { get; }
     public AppCategoryMap Categories { get; }
@@ -51,12 +61,12 @@ public sealed class InputMonitorHost : IDisposable
         _repository = new EventRepository(_database, Categories);
         _aggregator = new MetricsAggregator();
         _aggregator.RestoreInteractionBaseline(_repository.InteractionMinutes(EventRepository.DayString(DateTimeOffset.Now)));
-        _buffer = new EventBuffer();
+        _buffer = new EventBuffer(synchronizationGate: _collectionGate);
         _buffer.OnFlush = FlushBuffer;
         _fatigue = new FatigueEngine(Settings)
         {
             OnShouldRemind = ShowRest,
-            OnChanged = PersistSettings
+            OnChanged = MarkFatigueStateDirty
         };
         _capture = capture;
         _frontApp = frontApp;
@@ -68,14 +78,39 @@ public sealed class InputMonitorHost : IDisposable
 
         if (_frontApp is not null)
         {
-            _frontApp.SessionCompleted += session => _repository.InsertAppSession(session);
-            _frontApp.Heartbeat += (_, _) =>
+            _frontApp.SessionCompleted += session =>
             {
+                lock (_collectionGate)
+                {
+                    if (_collectionClosed || !Volatile.Read(ref _acceptingEvents))
+                    {
+                        return;
+                    }
+
+                    if (Settings.PrivacyMode)
+                    {
+                        session.WindowTitle = null;
+                    }
+
+                    _repository.InsertAppSession(session);
+                }
+            };
+            _frontApp.Heartbeat += (_, now) =>
+            {
+                var screenLocked = _frontApp.ScreenLocked;
+                lock (_collectionGate)
+                {
+                    if (_collectionClosed || !Volatile.Read(ref _acceptingEvents))
+                    {
+                        return;
+                    }
+
+                    _aggregator.ProcessAppHeartbeat(
+                        TimeSpan.FromSeconds(Settings.AppHeartbeatSeconds),
+                        now,
+                        screenLocked);
+                }
                 _fatigue.NotifyActivity(FatigueActivitySource.App);
-                _aggregator.ProcessAppHeartbeat(
-                    TimeSpan.FromSeconds(Settings.AppHeartbeatSeconds),
-                    DateTimeOffset.Now,
-                    _frontApp.ScreenLocked);
             };
         }
 
@@ -88,59 +123,123 @@ public sealed class InputMonitorHost : IDisposable
 
     public void Start()
     {
-        if (_running)
+        lock (_lifecycleGate)
         {
-            return;
-        }
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_running)
+            {
+                return;
+            }
 
-        if (_lifetime.IsCancellationRequested)
-        {
-            _lifetime.Dispose();
-            _lifetime = new CancellationTokenSource();
-        }
+            if (_lifetime.IsCancellationRequested)
+            {
+                _lifetime.Dispose();
+                _lifetime = new CancellationTokenSource();
+            }
 
-        _running = true;
-        _consumer = new Thread(Consume)
-        {
-            IsBackground = true,
-            Name = "InputMonitor.Consumer"
-        };
-        _consumer.Start();
-        _capture?.UpdateTrackSampleDistance(Settings.TrackSampleDistance);
-        _capture?.Start();
-        _frontApp?.UpdateHeartbeatInterval(TimeSpan.FromSeconds(Settings.AppHeartbeatSeconds));
-        _frontApp?.Start();
-        _drainTimer.Change(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
-        _fatigueTimer.Change(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+            _running = true;
+            lock (_admissionGate)
+            {
+                _acceptingEvents = true;
+            }
+            _consumer = new Thread(Consume)
+            {
+                IsBackground = true,
+                Name = "InputMonitor.Consumer"
+            };
+            _consumer.Start();
+            _capture?.UpdateTrackSampleDistance(Settings.TrackSampleDistance);
+            _capture?.Start();
+            _frontApp?.UpdateHeartbeatInterval(TimeSpan.FromSeconds(Settings.AppHeartbeatSeconds));
+            _frontApp?.Start();
+            _drainTimer.Change(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+            _fatigueTimer.Change(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+        }
     }
 
     public void Stop()
     {
-        if (!_running)
+        lock (_lifecycleGate)
         {
-            return;
-        }
+            if (!_running)
+            {
+                return;
+            }
 
-        _running = false;
-        _capture?.Stop();
-        _frontApp?.Stop();
-        _drainTimer.Change(Timeout.Infinite, Timeout.Infinite);
-        _fatigueTimer.Change(Timeout.Infinite, Timeout.Infinite);
-        if (!_lifetime.IsCancellationRequested)
+            _running = false;
+            _capture?.Stop();
+            _frontApp?.Stop();
+            lock (_admissionGate)
+            {
+                _acceptingEvents = false;
+            }
+            _drainTimer.Change(Timeout.Infinite, Timeout.Infinite);
+            _fatigueTimer.Change(Timeout.Infinite, Timeout.Infinite);
+            if (!_lifetime.IsCancellationRequested)
+            {
+                _lifetime.Cancel();
+            }
+
+            // Cancellation wakes an idle reader; it still consumes accepted records
+            // before exiting. Join before the final flush, including an in-flight append.
+            _consumer?.Join();
+            _consumer = null;
+            _buffer.Flush();
+            Drain();
+        }
+    }
+
+    /// <summary>
+    /// Stops or resumes raw input and foreground-app collection while keeping the host
+    /// (reminders, drain timer, aggregates) alive. Used by the surface's "停止采集" toggle.
+    /// </summary>
+    public void SetCaptureRunning(bool running)
+    {
+        lock (_lifecycleGate)
         {
-            _lifetime.Cancel();
-        }
+            if (!_running)
+            {
+                if (running)
+                {
+                    Start();
+                }
+                return;
+            }
 
-        _buffer.Flush();
-        Drain();
-        _consumer?.Join(TimeSpan.FromSeconds(2));
-        _consumer = null;
+            if (running)
+            {
+                lock (_admissionGate)
+                {
+                    _acceptingEvents = true;
+                }
+                _capture?.UpdateTrackSampleDistance(Settings.TrackSampleDistance);
+                _capture?.Start();
+                _frontApp?.Start();
+            }
+            else
+            {
+                _capture?.Stop();
+                _frontApp?.Stop();
+                lock (_admissionGate)
+                {
+                    _acceptingEvents = false;
+                }
+                _buffer.Flush();
+                Drain();
+            }
+        }
     }
 
     public LiveSnapshot Snapshot()
     {
+        MetricsSnapshot metrics;
+        lock (_collectionGate)
+        {
+            metrics = _aggregator.Snapshot();
+        }
+
         return new LiveSnapshot(
-            _aggregator.Snapshot(),
+            metrics,
             _fatigue.Snapshot(),
             _frontApp?.CurrentSession?.AppName,
             CaptureRunning,
@@ -185,54 +284,92 @@ public sealed class InputMonitorHost : IDisposable
 
     public void Dispose()
     {
-        if (_disposed)
+        lock (_lifecycleGate)
         {
-            return;
-        }
+            if (_disposed)
+            {
+                return;
+            }
 
-        _disposed = true;
-        try
-        {
-            Stop();
-        }
-        catch
-        {
-            // Host shutdown must not throw from Dispose.
-        }
+            _disposed = true;
+            try
+            {
+                Stop();
+            }
+            catch
+            {
+                // Host shutdown must not throw from Dispose.
+            }
 
-        _overlay?.Dismiss();
-        _buffer.Dispose();
-        _drainTimer.Dispose();
-        _fatigueTimer.Dispose();
-        _capture?.Dispose();
-        _frontApp?.Dispose();
-        Categories.Changed -= PersistSettings;
-        _database.Dispose();
-        _lifetime.Dispose();
+            _overlay?.Dismiss();
+            _capture?.Dispose();
+            _frontApp?.Dispose();
+            Categories.Changed -= PersistSettings;
+            lock (_collectionGate)
+            {
+                _events.Writer.TryComplete();
+                _buffer.Dispose();
+                _drainTimer.Dispose();
+                _fatigueTimer.Dispose();
+                _collectionClosed = true;
+                _database.Dispose();
+            }
+            _lifetime.Dispose();
+        }
     }
 
     private void Enqueue(InputEventRecord record)
     {
         if (Settings.PrivacyMode && record.Kind is InputEventKind.KeyDown or InputEventKind.KeyUp)
         {
-            record = record with { Characters = null };
+            // The raw code stays in memory so key hold durations still pair up, but the
+            // repository persists the coarse bucket instead of the code itself.
+            record = record with { Characters = null, KeyBucket = KeyBuckets.For(record.KeyCode) };
         }
 
-        _events.Enqueue(record);
+        lock (_admissionGate)
+        {
+            if (_acceptingEvents)
+            {
+                _events.Writer.TryWrite(record);
+            }
+        }
     }
 
     private void Consume()
     {
-        while (!_lifetime.IsCancellationRequested)
+        while (true)
         {
-            if (!_events.TryDequeue(out var record))
+            InputEventRecord? record;
+            lock (_collectionGate)
             {
-                Thread.Sleep(8);
+                if (_events.Reader.TryRead(out record))
+                {
+                    _aggregator.Process(record);
+                    _buffer.Append(record);
+                }
+                else if (_lifetime.IsCancellationRequested)
+                {
+                    return;
+                }
+            }
+
+            if (record is null)
+            {
+                try
+                {
+                    if (!_events.Reader.WaitToReadAsync(_lifetime.Token).AsTask().GetAwaiter().GetResult())
+                    {
+                        return;
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // Check the queue once more so Stop does not drop accepted input.
+                }
                 continue;
             }
 
-            _aggregator.Process(record);
-            _buffer.Append(record);
             var source = record.Kind switch
             {
                 InputEventKind.KeyDown or InputEventKind.KeyUp or InputEventKind.FlagsChanged => FatigueActivitySource.Keyboard,
@@ -244,25 +381,42 @@ public sealed class InputMonitorHost : IDisposable
 
     private void FlushBuffer(IReadOnlyList<InputEventRecord> batch)
     {
-        _repository.InsertEvents(batch);
-        _repository.InsertTrackPoints(batch);
+        lock (_collectionGate)
+        {
+            if (!_collectionClosed)
+            {
+                _repository.InsertEvents(batch);
+                _repository.InsertTrackPoints(batch);
+            }
+        }
     }
 
     private void Drain()
     {
-        var (day, delta) = _aggregator.DrainDelta();
-        if (delta.KeyCount == 0 &&
-            delta.ClickCount == 0 &&
-            delta.ScrollCount == 0 &&
-            delta.KeyDurationMs == 0 &&
-            delta.MoveDistance == 0 &&
-            delta.ActiveInputSeconds == 0 &&
-            delta.ActiveAppSeconds == 0)
+        FlushFatigueState();
+        lock (_collectionGate)
         {
-            return;
-        }
+            if (_collectionClosed)
+            {
+                return;
+            }
 
-        _repository.MergeDailyStats(day, delta);
+            foreach (var delta in _aggregator.DrainDeltas())
+            {
+                if (delta.KeyCount == 0 &&
+                    delta.ClickCount == 0 &&
+                    delta.ScrollCount == 0 &&
+                    delta.KeyDurationMs == 0 &&
+                    delta.MoveDistance == 0 &&
+                    delta.ActiveInputSeconds == 0 &&
+                    delta.ActiveAppSeconds == 0)
+                {
+                    continue;
+                }
+
+                _repository.MergeDailyStats(delta.Day, delta);
+            }
+        }
     }
 
     private void ShowRest()
@@ -280,13 +434,50 @@ public sealed class InputMonitorHost : IDisposable
         }
     }
 
+    /// <summary>Drops every collected row and resets the in-memory counters.</summary>
+    public void ClearCollectedData()
+    {
+        lock (_collectionGate)
+        {
+            _buffer.Flush();
+            // Stop admission only while discarding the queue, never during SQLite
+            // work. This also bounds clear if producers are continuously active.
+            lock (_admissionGate)
+            {
+                while (_events.Reader.TryRead(out _))
+                {
+                }
+            }
+            _repository.ClearAllData();
+            _aggregator.Reset(EventRepository.DayString(DateTimeOffset.Now));
+        }
+    }
+
     private void PersistSettings()
+    {
+        Volatile.Write(ref _fatigueStateDirty, 0);
+        WriteSettings();
+    }
+
+    private void MarkFatigueStateDirty() => Volatile.Write(ref _fatigueStateDirty, 1);
+
+    private void FlushFatigueState()
+    {
+        if (Interlocked.Exchange(ref _fatigueStateDirty, 0) == 1)
+        {
+            WriteSettings();
+        }
+    }
+
+    private void WriteSettings()
     {
         lock (_settingsGate)
         {
             Settings.CategoryOverrides = new Dictionary<string, AppCategory>(Categories.Overrides, StringComparer.OrdinalIgnoreCase);
             var json = JsonSerializer.Serialize(Settings, JsonOptions);
-            File.WriteAllText(_settingsPath, json);
+            var temporaryPath = _settingsPath + ".tmp";
+            File.WriteAllText(temporaryPath, json);
+            File.Move(temporaryPath, _settingsPath, overwrite: true);
         }
     }
 
@@ -303,8 +494,13 @@ public sealed class InputMonitorHost : IDisposable
             loaded.Clamp();
             return loaded;
         }
-        catch (JsonException)
+        catch (JsonException exception)
         {
+            var corruptPath = path + ".corrupt";
+            File.Move(path, corruptPath, overwrite: true);
+            Trace.TraceError(
+                $"InputMonitor: settings file '{path}' could not be parsed ({exception.Message}). " +
+                $"It was kept as '{corruptPath}'; privacy, retention and category overrides fall back to defaults until it is restored.");
             return new MonitorSettings();
         }
     }

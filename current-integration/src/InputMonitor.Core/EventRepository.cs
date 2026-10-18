@@ -18,6 +18,7 @@ public sealed class EventRepository
     public static string DayString(DateTimeOffset date) =>
         date.ToLocalTime().ToString("yyyy-MM-dd", DayCulture);
 
+    /// <summary>Local calendar-day bounds, inclusive at Start and exclusive at End.</summary>
     public static (double Start, double End) DayRange(string day)
     {
         if (!DateTime.TryParseExact(
@@ -31,8 +32,10 @@ public sealed class EventRepository
             return (now, now);
         }
 
-        var start = new DateTimeOffset(parsed.Date, TimeZoneInfo.Local.GetUtcOffset(parsed.Date));
-        var end = start.AddDays(1);
+        var startLocal = parsed.Date;
+        var endLocal = startLocal.AddDays(1);
+        var start = new DateTimeOffset(startLocal, TimeZoneInfo.Local.GetUtcOffset(startLocal));
+        var end = new DateTimeOffset(endLocal, TimeZoneInfo.Local.GetUtcOffset(endLocal));
         return (start.ToUnixTimeSeconds(), end.ToUnixTimeSeconds());
     }
 
@@ -50,14 +53,15 @@ public sealed class EventRepository
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO events (kind, ts, x, y, key_code, characters, modifiers, scroll_delta, is_auto_repeat)
-                VALUES ($kind, $ts, $x, $y, $key, $chars, $mods, $scroll, $repeat);
+                INSERT INTO events (kind, ts, x, y, key_code, key_bucket, characters, modifiers, scroll_delta, is_auto_repeat)
+                VALUES ($kind, $ts, $x, $y, $key, $bucket, $chars, $mods, $scroll, $repeat);
                 """;
             var kind = command.Parameters.Add("$kind", SqliteType.Text);
             var ts = command.Parameters.Add("$ts", SqliteType.Real);
             var x = command.Parameters.Add("$x", SqliteType.Real);
             var y = command.Parameters.Add("$y", SqliteType.Real);
             var key = command.Parameters.Add("$key", SqliteType.Integer);
+            var bucket = command.Parameters.Add("$bucket", SqliteType.Text);
             var chars = command.Parameters.Add("$chars", SqliteType.Text);
             var mods = command.Parameters.Add("$mods", SqliteType.Integer);
             var scroll = command.Parameters.Add("$scroll", SqliteType.Integer);
@@ -68,7 +72,8 @@ public sealed class EventRepository
                 ts.Value = ToUnix(record.WallTime);
                 x.Value = (object?)record.X ?? DBNull.Value;
                 y.Value = (object?)record.Y ?? DBNull.Value;
-                key.Value = (object?)record.KeyCode ?? DBNull.Value;
+                key.Value = record.KeyBucket is null ? (object?)record.KeyCode ?? DBNull.Value : DBNull.Value;
+                bucket.Value = (object?)record.KeyBucket ?? DBNull.Value;
                 chars.Value = (object?)record.Characters ?? DBNull.Value;
                 mods.Value = (long)record.Modifiers;
                 scroll.Value = record.ScrollDelta;
@@ -247,7 +252,7 @@ public sealed class EventRepository
             command.CommandText = $"""
                 SELECT CAST(strftime('%H', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS hour, COUNT(*)
                 FROM events
-                WHERE ts BETWEEN $start AND $end AND kind IN ({Placeholders(kinds.Count)}) AND is_auto_repeat = 0
+                WHERE ts >= $start AND ts < $end AND kind IN ({Placeholders(kinds.Count)}) AND is_auto_repeat = 0
                 GROUP BY hour;
                 """;
             command.Parameters.AddWithValue("$start", start);
@@ -268,7 +273,7 @@ public sealed class EventRepository
                        CAST(strftime('%H', datetime(start_ts, 'unixepoch', 'localtime')) AS INTEGER) AS hour,
                        SUM(duration)
                 FROM app_usage
-                WHERE start_ts BETWEEN $start AND $end
+                WHERE start_ts >= $start AND start_ts < $end
                 GROUP BY bundle_id, hour;
                 """;
             command.Parameters.AddWithValue("$start", start);
@@ -302,7 +307,7 @@ public sealed class EventRepository
                        strftime('%Y-%m-%d', datetime(start_ts, 'unixepoch', 'localtime')) AS day,
                        SUM(duration)
                 FROM app_usage
-                WHERE start_ts BETWEEN $start AND $end
+                WHERE start_ts >= $start AND start_ts < $end
                 GROUP BY bundle_id, day;
                 """;
             command.Parameters.AddWithValue("$start", start);
@@ -334,7 +339,7 @@ public sealed class EventRepository
             command.CommandText = """
                 SELECT strftime('%Y-%m-%d', datetime(start_ts, 'unixepoch', 'localtime')) AS day, SUM(duration)
                 FROM app_usage
-                WHERE start_ts BETWEEN $start AND $end
+                WHERE start_ts >= $start AND start_ts < $end
                 GROUP BY day;
                 """;
             command.Parameters.AddWithValue("$start", start);
@@ -359,7 +364,7 @@ public sealed class EventRepository
                         + CAST(strftime('%M', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER)) AS minute,
                        COUNT(*)
                 FROM events
-                WHERE ts BETWEEN $start AND $end AND kind IN ({Placeholders(kinds.Count)}) AND is_auto_repeat = 0
+                WHERE ts >= $start AND ts < $end AND kind IN ({Placeholders(kinds.Count)}) AND is_auto_repeat = 0
                 GROUP BY minute
                 ORDER BY minute;
                 """;
@@ -381,7 +386,7 @@ public sealed class EventRepository
                         + CAST(strftime('%M', datetime(start_ts, 'unixepoch', 'localtime')) AS INTEGER)) AS minute,
                        COUNT(*)
                 FROM app_usage
-                WHERE start_ts BETWEEN $start AND $end
+                WHERE start_ts >= $start AND start_ts < $end
                 GROUP BY minute
                 ORDER BY minute;
                 """;
@@ -406,7 +411,7 @@ public sealed class EventRepository
             command.CommandText = $"""
                 SELECT strftime('%Y-%m-%d', datetime(ts, 'unixepoch', 'localtime')) AS day, COUNT(*)
                 FROM events
-                WHERE ts BETWEEN $start AND $end AND kind IN ({Placeholders(kinds.Count)}) AND is_auto_repeat = 0
+                WHERE ts >= $start AND ts < $end AND kind IN ({Placeholders(kinds.Count)}) AND is_auto_repeat = 0
                 GROUP BY day;
                 """;
             command.Parameters.AddWithValue("$start", start);
@@ -426,7 +431,7 @@ public sealed class EventRepository
             command.CommandText = """
                 SELECT strftime('%Y-%m-%d', datetime(start_ts, 'unixepoch', 'localtime')) AS day, COUNT(*)
                 FROM app_usage
-                WHERE start_ts BETWEEN $start AND $end
+                WHERE start_ts >= $start AND start_ts < $end
                 GROUP BY day;
                 """;
             command.Parameters.AddWithValue("$start", start);
@@ -507,7 +512,7 @@ public sealed class EventRepository
             command.CommandText = """
                 SELECT app_name, bundle_id, category, SUM(duration)
                 FROM app_usage
-                WHERE start_ts BETWEEN $start AND $end
+                WHERE start_ts >= $start AND start_ts < $end
                 GROUP BY bundle_id
                 ORDER BY SUM(duration) DESC;
                 """;
@@ -540,9 +545,9 @@ public sealed class EventRepository
         {
             using var command = connection.CreateCommand();
             command.CommandText = """
-                SELECT COALESCE(characters, 'key:' || key_code) AS label, COUNT(*)
+                SELECT COALESCE(characters, key_bucket, 'key:' || key_code) AS label, COUNT(*)
                 FROM events
-                WHERE ts BETWEEN $start AND $end AND kind = 'keyDown' AND is_auto_repeat = 0
+                WHERE ts >= $start AND ts < $end AND kind = 'keyDown' AND is_auto_repeat = 0
                 GROUP BY label
                 ORDER BY COUNT(*) DESC
                 LIMIT $limit;
@@ -567,7 +572,7 @@ public sealed class EventRepository
         return _db.Run(connection =>
         {
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT x, y FROM track_points WHERE ts BETWEEN $start AND $end ORDER BY ts;";
+            command.CommandText = "SELECT x, y FROM track_points WHERE ts >= $start AND ts < $end ORDER BY ts;";
             command.Parameters.AddWithValue("$start", start);
             command.Parameters.AddWithValue("$end", end);
             using var reader = command.ExecuteReader();
@@ -610,19 +615,31 @@ public sealed class EventRepository
     public void PurgeExpiredData(int retentionDays)
     {
         var cutoff = DateTimeOffset.Now.AddDays(-retentionDays);
-        var cutoffTs = cutoff.ToUnixTimeSeconds();
-        var cutoffDay = DayString(cutoff);
+        Purge(cutoff.ToUnixTimeSeconds(), DayString(cutoff));
+    }
+
+    /// <summary>Deletes every collected row, including the current day.</summary>
+    public void ClearAllData() => Purge(null, null);
+
+    private void Purge(double? cutoffTs, string? cutoffDay)
+    {
         _db.Run(connection =>
         {
             using var transaction = connection.BeginTransaction();
-            DeleteByNumber(connection, transaction, "DELETE FROM events WHERE ts < $v;", cutoffTs);
-            DeleteByNumber(connection, transaction, "DELETE FROM track_points WHERE ts < $v;", cutoffTs);
-            DeleteByNumber(connection, transaction, "DELETE FROM app_usage WHERE start_ts < $v;", cutoffTs);
+            DeleteRows(connection, transaction, "events", "ts", cutoffTs);
+            DeleteRows(connection, transaction, "track_points", "ts", cutoffTs);
+            DeleteRows(connection, transaction, "app_usage", "start_ts", cutoffTs);
             using (var command = connection.CreateCommand())
             {
                 command.Transaction = transaction;
-                command.CommandText = "DELETE FROM daily_stats WHERE day < $v;";
-                command.Parameters.AddWithValue("$v", cutoffDay);
+                command.CommandText = cutoffDay is null
+                    ? "DELETE FROM daily_stats;"
+                    : "DELETE FROM daily_stats WHERE day < $v;";
+                if (cutoffDay is not null)
+                {
+                    command.Parameters.AddWithValue("$v", cutoffDay);
+                }
+
                 command.ExecuteNonQuery();
             }
 
@@ -656,7 +673,7 @@ public sealed class EventRepository
         }
 
         using var command = connection.CreateCommand();
-        var sql = $"SELECT DISTINCT CAST((ts - $origin) / 60 AS INTEGER) FROM {table} WHERE ts BETWEEN $start AND $end";
+        var sql = $"SELECT DISTINCT CAST((ts - $origin) / 60 AS INTEGER) FROM {table} WHERE ts >= $start AND ts < $end";
         if (kinds is { Count: > 0 })
         {
             sql += $" AND kind IN ({Placeholders(kinds.Count)})";
@@ -700,7 +717,7 @@ public sealed class EventRepository
         Dictionary<int, HashSet<int>> buckets)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT bundle_id, start_ts, end_ts FROM app_usage WHERE end_ts >= $start AND start_ts < $end;";
+        command.CommandText = "SELECT bundle_id, start_ts, end_ts FROM app_usage WHERE end_ts > $start AND start_ts < $end;";
         command.Parameters.AddWithValue("$start", start);
         command.Parameters.AddWithValue("$end", end);
         using var reader = command.ExecuteReader();
@@ -714,8 +731,9 @@ public sealed class EventRepository
             var sessionStart = Math.Max(reader.GetDouble(1), start);
             var sessionEnd = Math.Min(reader.GetDouble(2), end);
             var minute = (int)((sessionStart - start) / 60);
-            var last = (int)((sessionEnd - start) / 60);
-            while (minute <= last)
+            // A session ending exactly on a boundary does not occupy the next minute.
+            var lastExclusive = (int)Math.Ceiling((sessionEnd - start) / 60);
+            while (minute < lastExclusive)
             {
                 if (minute >= 0)
                 {
@@ -809,7 +827,7 @@ public sealed class EventRepository
         HashSet<int> minutes)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT DISTINCT CAST((ts - $origin) / 60 AS INTEGER) FROM {table} WHERE ts BETWEEN $start AND $end;";
+        command.CommandText = $"SELECT DISTINCT CAST((ts - $origin) / 60 AS INTEGER) FROM {table} WHERE ts >= $start AND ts < $end;";
         command.Parameters.AddWithValue("$origin", start);
         command.Parameters.AddWithValue("$start", start);
         command.Parameters.AddWithValue("$end", end);
@@ -827,7 +845,7 @@ public sealed class EventRepository
         HashSet<int> minutes)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT start_ts, end_ts FROM app_usage WHERE end_ts >= $start AND start_ts < $end;";
+        command.CommandText = "SELECT start_ts, end_ts FROM app_usage WHERE end_ts > $start AND start_ts < $end;";
         command.Parameters.AddWithValue("$start", start);
         command.Parameters.AddWithValue("$end", end);
         using var reader = command.ExecuteReader();
@@ -836,8 +854,8 @@ public sealed class EventRepository
             var sessionStart = Math.Max(reader.GetDouble(0), start);
             var sessionEnd = Math.Min(reader.GetDouble(1), end);
             var minute = (int)((sessionStart - start) / 60);
-            var last = Math.Min((int)((sessionEnd - start) / 60), 1439);
-            while (minute <= last)
+            var lastExclusive = Math.Min((int)Math.Ceiling((sessionEnd - start) / 60), 1440);
+            while (minute < lastExclusive)
             {
                 minutes.Add(minute);
                 minute++;
@@ -845,16 +863,25 @@ public sealed class EventRepository
         }
     }
 
-    private static void DeleteByNumber(
+    private static void DeleteRows(
         SqliteConnection connection,
         SqliteTransaction transaction,
-        string sql,
-        double value)
+        string table,
+        string timestampColumn,
+        double? cutoff)
     {
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = sql;
-        command.Parameters.AddWithValue("$v", value);
+        if (cutoff is { } value)
+        {
+            command.CommandText = $"DELETE FROM {table} WHERE {timestampColumn} < $v;";
+            command.Parameters.AddWithValue("$v", value);
+        }
+        else
+        {
+            command.CommandText = $"DELETE FROM {table};";
+        }
+
         command.ExecuteNonQuery();
     }
 
