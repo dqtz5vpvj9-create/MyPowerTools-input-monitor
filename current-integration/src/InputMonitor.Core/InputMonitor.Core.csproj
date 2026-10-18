@@ -11,6 +11,9 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.8" />
+    <!-- Override the older transitive native SQLite for CVE-2025-6965 while
+         retaining the existing e_sqlite3 runtime names and staging layout. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.14" />
   </ItemGroup>
 
 </Project>

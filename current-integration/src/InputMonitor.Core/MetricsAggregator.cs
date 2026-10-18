@@ -1,7 +1,7 @@
 namespace InputMonitor.Core;
 
 /// <summary>
-/// In-memory daily counters. Must be fed from a single consumer thread.
+/// In-memory daily counters. Callers must serialize all reads and writes.
 /// </summary>
 public sealed class MetricsAggregator
 {
@@ -23,6 +23,7 @@ public sealed class MetricsAggregator
     private long _deltaKeyDurationMs;
     private double _deltaActiveInputSeconds;
     private double _deltaActiveAppSeconds;
+    private readonly Queue<(string Day, DaySummary Delta)> _pendingDays = new();
 
     private readonly Dictionary<long, ulong> _keyDownTimestamps = [];
     private DateTimeOffset? _lastEventWallTime;
@@ -118,6 +119,24 @@ public sealed class MetricsAggregator
 
     public (string Day, DaySummary Delta) DrainDelta()
     {
+        return _pendingDays.TryDequeue(out var pending) ? pending : DrainCurrentDelta();
+    }
+
+    /// <summary>Drains all rotated days and the current day exactly once.</summary>
+    public IReadOnlyList<DaySummary> DrainDeltas()
+    {
+        var deltas = new List<DaySummary>(_pendingDays.Count + 1);
+        while (_pendingDays.TryDequeue(out var pending))
+        {
+            deltas.Add(pending.Delta);
+        }
+
+        deltas.Add(DrainCurrentDelta().Delta);
+        return deltas;
+    }
+
+    private (string Day, DaySummary Delta) DrainCurrentDelta()
+    {
         var delta = new DaySummary
         {
             Day = Day,
@@ -171,6 +190,12 @@ public sealed class MetricsAggregator
     /// <summary>Zeroes every counter and the pending delta, moving the aggregator onto <paramref name="day"/>.</summary>
     public void Reset(string day)
     {
+        _pendingDays.Clear();
+        ResetCurrentDay(day);
+    }
+
+    private void ResetCurrentDay(string day)
+    {
         Day = day;
         KeyCount = 0;
         ClickCount = 0;
@@ -196,7 +221,8 @@ public sealed class MetricsAggregator
         var currentDay = EventRepository.DayString(date);
         if (currentDay != Day)
         {
-            Reset(currentDay);
+            _pendingDays.Enqueue(DrainCurrentDelta());
+            ResetCurrentDay(currentDay);
         }
     }
 

@@ -18,6 +18,7 @@ public sealed class EventRepository
     public static string DayString(DateTimeOffset date) =>
         date.ToLocalTime().ToString("yyyy-MM-dd", DayCulture);
 
+    /// <summary>Local calendar-day bounds, inclusive at Start and exclusive at End.</summary>
     public static (double Start, double End) DayRange(string day)
     {
         if (!DateTime.TryParseExact(
@@ -251,7 +252,7 @@ public sealed class EventRepository
             command.CommandText = $"""
                 SELECT CAST(strftime('%H', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS hour, COUNT(*)
                 FROM events
-                WHERE ts BETWEEN $start AND $end AND kind IN ({Placeholders(kinds.Count)}) AND is_auto_repeat = 0
+                WHERE ts >= $start AND ts < $end AND kind IN ({Placeholders(kinds.Count)}) AND is_auto_repeat = 0
                 GROUP BY hour;
                 """;
             command.Parameters.AddWithValue("$start", start);
@@ -272,7 +273,7 @@ public sealed class EventRepository
                        CAST(strftime('%H', datetime(start_ts, 'unixepoch', 'localtime')) AS INTEGER) AS hour,
                        SUM(duration)
                 FROM app_usage
-                WHERE start_ts BETWEEN $start AND $end
+                WHERE start_ts >= $start AND start_ts < $end
                 GROUP BY bundle_id, hour;
                 """;
             command.Parameters.AddWithValue("$start", start);
@@ -306,7 +307,7 @@ public sealed class EventRepository
                        strftime('%Y-%m-%d', datetime(start_ts, 'unixepoch', 'localtime')) AS day,
                        SUM(duration)
                 FROM app_usage
-                WHERE start_ts BETWEEN $start AND $end
+                WHERE start_ts >= $start AND start_ts < $end
                 GROUP BY bundle_id, day;
                 """;
             command.Parameters.AddWithValue("$start", start);
@@ -338,7 +339,7 @@ public sealed class EventRepository
             command.CommandText = """
                 SELECT strftime('%Y-%m-%d', datetime(start_ts, 'unixepoch', 'localtime')) AS day, SUM(duration)
                 FROM app_usage
-                WHERE start_ts BETWEEN $start AND $end
+                WHERE start_ts >= $start AND start_ts < $end
                 GROUP BY day;
                 """;
             command.Parameters.AddWithValue("$start", start);
@@ -363,7 +364,7 @@ public sealed class EventRepository
                         + CAST(strftime('%M', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER)) AS minute,
                        COUNT(*)
                 FROM events
-                WHERE ts BETWEEN $start AND $end AND kind IN ({Placeholders(kinds.Count)}) AND is_auto_repeat = 0
+                WHERE ts >= $start AND ts < $end AND kind IN ({Placeholders(kinds.Count)}) AND is_auto_repeat = 0
                 GROUP BY minute
                 ORDER BY minute;
                 """;
@@ -385,7 +386,7 @@ public sealed class EventRepository
                         + CAST(strftime('%M', datetime(start_ts, 'unixepoch', 'localtime')) AS INTEGER)) AS minute,
                        COUNT(*)
                 FROM app_usage
-                WHERE start_ts BETWEEN $start AND $end
+                WHERE start_ts >= $start AND start_ts < $end
                 GROUP BY minute
                 ORDER BY minute;
                 """;
@@ -410,7 +411,7 @@ public sealed class EventRepository
             command.CommandText = $"""
                 SELECT strftime('%Y-%m-%d', datetime(ts, 'unixepoch', 'localtime')) AS day, COUNT(*)
                 FROM events
-                WHERE ts BETWEEN $start AND $end AND kind IN ({Placeholders(kinds.Count)}) AND is_auto_repeat = 0
+                WHERE ts >= $start AND ts < $end AND kind IN ({Placeholders(kinds.Count)}) AND is_auto_repeat = 0
                 GROUP BY day;
                 """;
             command.Parameters.AddWithValue("$start", start);
@@ -430,7 +431,7 @@ public sealed class EventRepository
             command.CommandText = """
                 SELECT strftime('%Y-%m-%d', datetime(start_ts, 'unixepoch', 'localtime')) AS day, COUNT(*)
                 FROM app_usage
-                WHERE start_ts BETWEEN $start AND $end
+                WHERE start_ts >= $start AND start_ts < $end
                 GROUP BY day;
                 """;
             command.Parameters.AddWithValue("$start", start);
@@ -511,7 +512,7 @@ public sealed class EventRepository
             command.CommandText = """
                 SELECT app_name, bundle_id, category, SUM(duration)
                 FROM app_usage
-                WHERE start_ts BETWEEN $start AND $end
+                WHERE start_ts >= $start AND start_ts < $end
                 GROUP BY bundle_id
                 ORDER BY SUM(duration) DESC;
                 """;
@@ -546,7 +547,7 @@ public sealed class EventRepository
             command.CommandText = """
                 SELECT COALESCE(characters, key_bucket, 'key:' || key_code) AS label, COUNT(*)
                 FROM events
-                WHERE ts BETWEEN $start AND $end AND kind = 'keyDown' AND is_auto_repeat = 0
+                WHERE ts >= $start AND ts < $end AND kind = 'keyDown' AND is_auto_repeat = 0
                 GROUP BY label
                 ORDER BY COUNT(*) DESC
                 LIMIT $limit;
@@ -571,7 +572,7 @@ public sealed class EventRepository
         return _db.Run(connection =>
         {
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT x, y FROM track_points WHERE ts BETWEEN $start AND $end ORDER BY ts;";
+            command.CommandText = "SELECT x, y FROM track_points WHERE ts >= $start AND ts < $end ORDER BY ts;";
             command.Parameters.AddWithValue("$start", start);
             command.Parameters.AddWithValue("$end", end);
             using var reader = command.ExecuteReader();
@@ -672,7 +673,7 @@ public sealed class EventRepository
         }
 
         using var command = connection.CreateCommand();
-        var sql = $"SELECT DISTINCT CAST((ts - $origin) / 60 AS INTEGER) FROM {table} WHERE ts BETWEEN $start AND $end";
+        var sql = $"SELECT DISTINCT CAST((ts - $origin) / 60 AS INTEGER) FROM {table} WHERE ts >= $start AND ts < $end";
         if (kinds is { Count: > 0 })
         {
             sql += $" AND kind IN ({Placeholders(kinds.Count)})";
@@ -716,7 +717,7 @@ public sealed class EventRepository
         Dictionary<int, HashSet<int>> buckets)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT bundle_id, start_ts, end_ts FROM app_usage WHERE end_ts >= $start AND start_ts < $end;";
+        command.CommandText = "SELECT bundle_id, start_ts, end_ts FROM app_usage WHERE end_ts > $start AND start_ts < $end;";
         command.Parameters.AddWithValue("$start", start);
         command.Parameters.AddWithValue("$end", end);
         using var reader = command.ExecuteReader();
@@ -730,8 +731,9 @@ public sealed class EventRepository
             var sessionStart = Math.Max(reader.GetDouble(1), start);
             var sessionEnd = Math.Min(reader.GetDouble(2), end);
             var minute = (int)((sessionStart - start) / 60);
-            var last = (int)((sessionEnd - start) / 60);
-            while (minute <= last)
+            // A session ending exactly on a boundary does not occupy the next minute.
+            var lastExclusive = (int)Math.Ceiling((sessionEnd - start) / 60);
+            while (minute < lastExclusive)
             {
                 if (minute >= 0)
                 {
@@ -825,7 +827,7 @@ public sealed class EventRepository
         HashSet<int> minutes)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT DISTINCT CAST((ts - $origin) / 60 AS INTEGER) FROM {table} WHERE ts BETWEEN $start AND $end;";
+        command.CommandText = $"SELECT DISTINCT CAST((ts - $origin) / 60 AS INTEGER) FROM {table} WHERE ts >= $start AND ts < $end;";
         command.Parameters.AddWithValue("$origin", start);
         command.Parameters.AddWithValue("$start", start);
         command.Parameters.AddWithValue("$end", end);
@@ -843,7 +845,7 @@ public sealed class EventRepository
         HashSet<int> minutes)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT start_ts, end_ts FROM app_usage WHERE end_ts >= $start AND start_ts < $end;";
+        command.CommandText = "SELECT start_ts, end_ts FROM app_usage WHERE end_ts > $start AND start_ts < $end;";
         command.Parameters.AddWithValue("$start", start);
         command.Parameters.AddWithValue("$end", end);
         using var reader = command.ExecuteReader();
@@ -852,8 +854,8 @@ public sealed class EventRepository
             var sessionStart = Math.Max(reader.GetDouble(0), start);
             var sessionEnd = Math.Min(reader.GetDouble(1), end);
             var minute = (int)((sessionStart - start) / 60);
-            var last = Math.Min((int)((sessionEnd - start) / 60), 1439);
-            while (minute <= last)
+            var lastExclusive = Math.Min((int)Math.Ceiling((sessionEnd - start) / 60), 1440);
+            while (minute < lastExclusive)
             {
                 minutes.Add(minute);
                 minute++;

@@ -51,3 +51,19 @@ Overlay into a Dev install from the superproject:
 pwsh.exe -NoLogo -NoProfile -NonInteractive -File .\scripts\Start-MyPowerTools-Dev.ps1 `
   -Scope Tools -ToolId input-monitor
 ```
+
+## Core regression tests
+
+From this repository, run:
+
+```sh
+dotnet test tests/InputMonitor.Core.Tests/InputMonitor.Core.Tests.csproj -c Release -p:RestoreSources=https://api.nuget.org/v3/index.json
+```
+
+These tests use temporary SQLite databases and synthetic events; they do not enable
+keyboard capture. They cover exclusive midnight/minute boundaries and preserve
+inclusive date-string ranges, retained deltas across midnight, synchronized clear
+and persistence, event-driven queue shutdown/restart, and concurrent aggregation.
+Failed storage writes and clipping of active foreground sessions remain separate
+limitations. This project owns `InputMonitorProduct.Tests.cs` and runs those checks
+without building the UI projects; the suite root no longer compiles a duplicate copy.
