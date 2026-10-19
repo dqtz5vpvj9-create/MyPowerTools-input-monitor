@@ -2,7 +2,8 @@
 param(
     [string] $MyPowerToolsRepoRoot,
     [ValidateSet('Debug', 'Release')]
-    [string] $Configuration = 'Release'
+    [string] $Configuration = 'Release',
+    [string] $PrebuiltCliPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -27,7 +28,22 @@ if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'src\MyPowerTools.Abstract
     throw "MyPowerToolsRepoRoot '$repoRoot' is invalid."
 }
 
+# Only reuse a CLI explicitly supplied by the caller; standalone builds retain their build behavior.
+$cliExecutable = $null
+$cliInvocationArguments = @('run', '--project', $cliProject, '--configuration', $Configuration, '--')
+if ($PSBoundParameters.ContainsKey('PrebuiltCliPath')) {
+    if ([string]::IsNullOrWhiteSpace($PrebuiltCliPath) -or
+        -not (Test-Path -LiteralPath $PrebuiltCliPath -PathType Leaf)) {
+        throw "Prebuilt CLI '$PrebuiltCliPath' is missing or is not a file."
+    }
+    $cliExecutable = (Resolve-Path -LiteralPath $PrebuiltCliPath -ErrorAction Stop).ProviderPath
+    $cliInvocationArguments = @()
+}
+
 $dotnet = Get-Command 'dotnet' -CommandType Application -ErrorAction Stop
+if ($null -eq $cliExecutable) {
+    $cliExecutable = $dotnet.Source
+}
 $dotnetArguments = @(
     'build'
     $projectPath
@@ -120,34 +136,22 @@ if (-not (Test-Path -LiteralPath $expectedSurfaceAssembly -PathType Leaf)) {
     throw "Expected Surface assembly '$expectedSurfaceAssembly' is missing."
 }
 
-$cliArguments = @(
-    'run'
-    '--project'
-    $cliProject
-    '--configuration'
-    $Configuration
-    '--'
+$cliArguments = $cliInvocationArguments + @(
     'package'
     'hash'
     $artifactPackage
 )
-& $dotnet.Source @cliArguments
+& $cliExecutable @cliArguments
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to write package hashes for Input Monitor."
 }
 
-$signArguments = @(
-    'run'
-    '--project'
-    $cliProject
-    '--configuration'
-    $Configuration
-    '--'
+$signArguments = $cliInvocationArguments + @(
     'package'
     'sign-local'
     $artifactPackage
 )
-& $dotnet.Source @signArguments
+& $cliExecutable @signArguments
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to write the local signature hook for Input Monitor."
 }
