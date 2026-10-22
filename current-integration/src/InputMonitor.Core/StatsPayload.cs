@@ -434,17 +434,17 @@ public static class StatsPayloadBuilder
         switch (grain)
         {
             case "month":
-                startDate = new DateTime(today.Year, today.Month, 1);
+                startDate = new DateTime(selected.Year, selected.Month, 1);
                 endDate = startDate.AddMonths(1).AddDays(-1);
                 break;
             case "quarter":
-                var quarter = ((today.Month - 1) / 3) * 3 + 1;
-                startDate = new DateTime(today.Year, quarter, 1);
+                var quarter = ((selected.Month - 1) / 3) * 3 + 1;
+                startDate = new DateTime(selected.Year, quarter, 1);
                 endDate = startDate.AddMonths(3).AddDays(-1);
                 break;
             case "year":
-                startDate = new DateTime(today.Year, 1, 1);
-                endDate = new DateTime(today.Year, 12, 31);
+                startDate = new DateTime(selected.Year, 1, 1);
+                endDate = new DateTime(selected.Year, 12, 31);
                 break;
             default:
                 startDate = selected;

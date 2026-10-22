@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using InputMonitor.Core;
 
@@ -6,6 +7,28 @@ namespace MyPowerTools.Tests;
 public sealed class InputMonitorProductTests
 {
     private static readonly string ToolRoot = FindToolRepositoryRoot();
+
+    [Theory]
+    [InlineData("month", "2024-02-01", "2024-02-29")]
+    [InlineData("quarter", "2024-01-01", "2024-03-31")]
+    [InlineData("year", "2024-01-01", "2024-12-31")]
+    public void Historical_grain_uses_selected_date(string grain, string firstDay, string lastDay)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "mpt-input-monitor", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var host = new InputMonitorHost(directory);
+            var payload = JsonSerializer.SerializeToNode(host.BuildStatsPayload(new StatsQuery
+            {
+                Day = "2024-02-15", Grain = grain, Dimension = "keyboard"
+            }))!;
+            var days = payload["perDayActivity"]!.AsArray();
+            Assert.Equal(firstDay, days[0]!["day"]!.GetValue<string>());
+            Assert.Equal(lastDay, days[^1]!["day"]!.GetValue<string>());
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
 
     [Fact]
     public void Input_monitor_declares_a_dotnet_surface()
