@@ -149,7 +149,7 @@ public sealed class InputMonitorModule : IMptModule, IMptModuleLifecycle
 
             if (string.Equals(request.CommandId, "input-monitor.skip", StringComparison.OrdinalIgnoreCase))
             {
-                host.Fatigue.Skip();
+                host.SkipRest();
                 return Ok(request, JsonSerializer.Serialize(host.Snapshot(), JsonOptions));
             }
 
@@ -218,11 +218,9 @@ public sealed class InputMonitorModule : IMptModule, IMptModuleLifecycle
             "restDurationSeconds": { "type": "integer", "title": "休息时长（秒）", "minimum": 10, "maximum": 7200, "default": 300 },
             "fatigueFromKeyboard": { "type": "boolean", "title": "键盘计入疲劳", "default": true },
             "fatigueFromMouse": { "type": "boolean", "title": "鼠标计入疲劳", "default": true },
-            "fatigueFromApp": { "type": "boolean", "title": "前台窗口计入疲劳", "default": true },
             "privacyMode": { "type": "boolean", "title": "隐私模式（不记录按键字符与键码）", "default": true },
             "trackSampleDistance": { "type": "number", "title": "轨迹采样最小距离（像素）", "minimum": 5, "maximum": 200, "default": 30 },
             "appHeartbeatSeconds": { "type": "number", "title": "前台窗口心跳（秒）", "minimum": 5, "maximum": 120, "default": 30 },
-            "remindAfterResume": { "type": "boolean", "title": "恢复提醒后若已超阈值立即提醒", "default": true },
             "dataRetentionDays": { "type": "integer", "title": "数据保留天数", "minimum": 1, "maximum": 36500, "default": 365 }
           }
         }
@@ -238,11 +236,9 @@ public sealed class InputMonitorModule : IMptModule, IMptModuleLifecycle
             ["restDurationSeconds"] = settings.RestDurationSeconds,
             ["fatigueFromKeyboard"] = settings.FatigueFromKeyboard,
             ["fatigueFromMouse"] = settings.FatigueFromMouse,
-            ["fatigueFromApp"] = settings.FatigueFromApp,
             ["privacyMode"] = settings.PrivacyMode,
             ["trackSampleDistance"] = settings.TrackSampleDistance,
             ["appHeartbeatSeconds"] = settings.AppHeartbeatSeconds,
-            ["remindAfterResume"] = settings.RemindAfterResume,
             ["dataRetentionDays"] = settings.DataRetentionDays
         };
         return ValueTask.FromResult(new SettingsSnapshotDocument(Id, 1, values, DateTimeOffset.UtcNow));
@@ -332,11 +328,9 @@ public sealed class InputMonitorModule : IMptModule, IMptModuleLifecycle
         ["restDurationSeconds"] = settings.RestDurationSeconds,
         ["fatigueFromKeyboard"] = settings.FatigueFromKeyboard,
         ["fatigueFromMouse"] = settings.FatigueFromMouse,
-        ["fatigueFromApp"] = settings.FatigueFromApp,
         ["privacyMode"] = settings.PrivacyMode,
         ["trackSampleDistance"] = settings.TrackSampleDistance,
         ["appHeartbeatSeconds"] = settings.AppHeartbeatSeconds,
-        ["remindAfterResume"] = settings.RemindAfterResume,
         ["dataRetentionDays"] = settings.DataRetentionDays
     };
 
@@ -347,11 +341,9 @@ public sealed class InputMonitorModule : IMptModule, IMptModuleLifecycle
         settings.RestDurationSeconds = SettingsJson.ReadInt(values, "restDurationSeconds") ?? settings.RestDurationSeconds;
         settings.FatigueFromKeyboard = SettingsJson.ReadBool(values, "fatigueFromKeyboard") ?? settings.FatigueFromKeyboard;
         settings.FatigueFromMouse = SettingsJson.ReadBool(values, "fatigueFromMouse") ?? settings.FatigueFromMouse;
-        settings.FatigueFromApp = SettingsJson.ReadBool(values, "fatigueFromApp") ?? settings.FatigueFromApp;
         settings.PrivacyMode = SettingsJson.ReadBool(values, "privacyMode") ?? settings.PrivacyMode;
         settings.TrackSampleDistance = SettingsJson.ReadDouble(values, "trackSampleDistance") ?? settings.TrackSampleDistance;
         settings.AppHeartbeatSeconds = SettingsJson.ReadDouble(values, "appHeartbeatSeconds") ?? settings.AppHeartbeatSeconds;
-        settings.RemindAfterResume = SettingsJson.ReadBool(values, "remindAfterResume") ?? settings.RemindAfterResume;
         settings.DataRetentionDays = SettingsJson.ReadInt(values, "dataRetentionDays") ?? settings.DataRetentionDays;
         settings.Clamp();
         return settings;

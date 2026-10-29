@@ -68,6 +68,10 @@ public sealed class InputMonitorHost : IDisposable
             OnShouldRemind = ShowRest,
             OnChanged = MarkFatigueStateDirty
         };
+        if (_fatigue.SanitizedPersistedValue)
+        {
+            PersistSettings();
+        }
         _capture = capture;
         _frontApp = frontApp;
         _overlay = overlay;
@@ -110,12 +114,11 @@ public sealed class InputMonitorHost : IDisposable
                         now,
                         screenLocked);
                 }
-                _fatigue.NotifyActivity(FatigueActivitySource.App);
             };
         }
 
         _drainTimer = new Timer(_ => Drain(), null, Timeout.Infinite, Timeout.Infinite);
-        _fatigueTimer = new Timer(_ => _fatigue.Tick(DateTimeOffset.Now), null, Timeout.Infinite, Timeout.Infinite);
+        _fatigueTimer = new Timer(_ => _fatigue.Tick(DateTimeOffset.Now, _frontApp?.ScreenLocked ?? false), null, Timeout.Infinite, Timeout.Infinite);
         _repository.PurgeExpiredData(Settings.DataRetentionDays);
     }
 
@@ -187,6 +190,12 @@ public sealed class InputMonitorHost : IDisposable
             _buffer.Flush();
             Drain();
         }
+    }
+
+    public void SkipRest()
+    {
+        _fatigue.Skip();
+        _overlay?.Dismiss();
     }
 
     /// <summary>

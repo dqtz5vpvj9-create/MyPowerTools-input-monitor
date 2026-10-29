@@ -1,173 +1,184 @@
 namespace InputMonitor.Core;
 
-/// <summary>
-/// Fatigue state machine ported from the macOS InputMonitor FatigueEngine.
-/// </summary>
+/// <summary>Input-driven work timer with automatic credit for natural breaks.</summary>
 public sealed class FatigueEngine
 {
-    public const double IdleGapSeconds = 120;
+    public const double IdleGapSeconds = 60;
     public const double DefaultThreshold = 100;
-    public const double SkipThreshold = 120;
-
     private readonly MonitorSettings _settings;
     private readonly object _gate = new();
+    private readonly TimeProvider _clock;
     private DateTimeOffset? _lastActivity;
-    private (double Value, double Threshold)? _manualRestBackup;
-
+    private DateTimeOffset _lastTick;
+    private double _pendingIdlePoints;
+    private bool _thresholdLatched;
+    private bool _awaitingInput;
+    private bool _inputSinceTick;
     public double Value { get; private set; }
     public double Threshold { get; private set; } = DefaultThreshold;
     public bool IsResting { get; private set; }
     public bool IsPaused { get; private set; }
-    public int Percentage => (int)Math.Round(Value);
+    public bool SanitizedPersistedValue { get; private set; }
+    public int Percentage => ToPercentage(Value, Threshold);
     public Action? OnShouldRemind { get; set; }
     public Action? OnChanged { get; set; }
 
-    public FatigueEngine(MonitorSettings settings)
+    public FatigueEngine(MonitorSettings settings, TimeProvider? clock = null)
     {
         _settings = settings;
-        Value = settings.FatigueValue;
-        Threshold = settings.FatigueThreshold <= 0 ? DefaultThreshold : settings.FatigueThreshold;
+        _clock = clock ?? TimeProvider.System;
+        _lastTick = _clock.GetUtcNow();
+        _lastActivity = settings.FatigueLastActivity;
+        Value = Math.Max(0, settings.FatigueValue);
         IsPaused = settings.FatigueIsPaused;
+        // Old versions have no activity timestamp and may have accumulated while unattended.
+        if (_lastActivity is null || _lastActivity > _lastTick ||
+            (_lastTick - _lastActivity.Value).TotalSeconds >= settings.RestDurationSeconds ||
+            !double.IsFinite(Value) || Value > DefaultThreshold + 1)
+        {
+            Value = 0;
+            _lastActivity = null;
+            SanitizedPersistedValue = true;
+        }
+        else
+        {
+            // Provisional seconds after the last input never survive a restart.
+            Value = Math.Max(0, Value - settings.FatiguePendingIdlePoints);
+        }
+        Persist();
     }
 
     public FatigueSnapshot Snapshot()
     {
-        lock (_gate)
-        {
-            return new(Value, Threshold, IsResting, IsPaused, Percentage);
-        }
+        lock (_gate) return new(Value, Threshold, IsResting, IsPaused, Percentage);
     }
 
     public void NotifyActivity(FatigueActivitySource source)
     {
-        var allowed = source switch
-        {
-            FatigueActivitySource.Keyboard => _settings.FatigueFromKeyboard,
-            FatigueActivitySource.Mouse => _settings.FatigueFromMouse,
-            FatigueActivitySource.App => _settings.FatigueFromApp,
-            _ => false
-        };
-        if (!allowed)
-        {
-            return;
-        }
-
+        if (!(source == FatigueActivitySource.Keyboard && _settings.FatigueFromKeyboard ||
+              source == FatigueActivitySource.Mouse && _settings.FatigueFromMouse)) return;
         lock (_gate)
         {
-            _lastActivity = DateTimeOffset.Now;
+            var now = _clock.GetUtcNow();
+            Advance(now, false);
+            _lastActivity = now;
+            _awaitingInput = false;
+            _pendingIdlePoints = 0;
+            _inputSinceTick = true;
+            Persist();
         }
+        OnChanged?.Invoke();
     }
 
-    public void Tick(DateTimeOffset now)
+    public void Tick(DateTimeOffset now, bool screenLocked = false)
     {
         Action? remind = null;
         lock (_gate)
         {
-            if (IsResting)
+            var receivedInput = _inputSinceTick;
+            _inputSinceTick = false;
+            Advance(now, screenLocked);
+            if (receivedInput && !screenLocked && !_awaitingInput && !IsPaused && !IsResting && _lastActivity is { } last &&
+                (now - last).TotalSeconds < IdleGapSeconds && Value >= Threshold - 0.0000001 &&
+                !_thresholdLatched)
             {
-                return;
-            }
-
-            if (_lastActivity is not { } last || (now - last).TotalSeconds > IdleGapSeconds)
-            {
-                return;
-            }
-
-            var pointsPerSecond = 100.0 / Math.Max(1, _settings.RemindIntervalMinutes * 60);
-            Value += pointsPerSecond;
-            Persist();
-            if (Value >= Threshold && !IsPaused)
-            {
+                _thresholdLatched = true;
+                IsResting = true;
                 remind = OnShouldRemind;
             }
+            Persist();
         }
-
         remind?.Invoke();
         OnChanged?.Invoke();
+    }
+
+    private void Advance(DateTimeOffset now, bool screenLocked)
+    {
+        var elapsed = Math.Max(0, (now - _lastTick).TotalSeconds);
+        _lastTick = now;
+        if (_lastActivity is not { } last || IsResting) return;
+        var idle = Math.Max(0, (now - last).TotalSeconds);
+        if (idle >= _settings.RestDurationSeconds)
+        {
+            Reset();
+            return;
+        }
+        if (screenLocked || idle >= IdleGapSeconds || elapsed > 5)
+        {
+            _awaitingInput = true;
+            Value = Math.Max(0, Value - _pendingIdlePoints);
+            _pendingIdlePoints = 0;
+            return;
+        }
+        if (IsPaused || _awaitingInput) return;
+        var points = elapsed * 100.0 / Math.Max(1, _settings.RemindIntervalMinutes * 60);
+        var added = Math.Min(points, Math.Max(0, Threshold - Value));
+        Value += added;
+        _pendingIdlePoints += added;
     }
 
     public void ManualRest()
     {
         lock (_gate)
         {
-            if (IsResting)
-            {
-                return;
-            }
-
-            _manualRestBackup = (Value, Threshold);
+            if (IsResting) return;
+            IsResting = true;
+            _thresholdLatched = true;
         }
-
         OnShouldRemind?.Invoke();
     }
 
     public void BeginResting()
     {
-        lock (_gate)
-        {
-            IsResting = true;
-        }
+        lock (_gate) { IsResting = true; _thresholdLatched = true; }
     }
 
-    public void Skip()
-    {
-        lock (_gate)
-        {
-            if (_manualRestBackup is { } backup)
-            {
-                Value = backup.Value;
-                Threshold = backup.Threshold;
-                _manualRestBackup = null;
-            }
-            else
-            {
-                Value = DefaultThreshold;
-                Threshold = SkipThreshold;
-            }
-
-            IsResting = false;
-            Persist();
-        }
-
-        OnChanged?.Invoke();
-    }
+    public void Skip() => RestDone();
 
     public void RestDone()
     {
         lock (_gate)
         {
-            Value = 0;
-            Threshold = DefaultThreshold;
-            _manualRestBackup = null;
+            Reset();
             IsResting = false;
+            _lastTick = _clock.GetUtcNow();
             Persist();
         }
-
         OnChanged?.Invoke();
     }
 
     public void SetPaused(bool paused)
     {
-        var remind = false;
         lock (_gate)
         {
+            if (IsPaused == paused) return;
             IsPaused = paused;
+            Reset();
+            _lastTick = _clock.GetUtcNow();
             Persist();
-            remind = !paused && _settings.RemindAfterResume && Value >= Threshold;
         }
-
-        if (remind)
-        {
-            OnShouldRemind?.Invoke();
-        }
-
         OnChanged?.Invoke();
     }
+
+    private void Reset()
+    {
+        Value = 0;
+        Threshold = DefaultThreshold;
+        _lastActivity = null;
+        _pendingIdlePoints = 0;
+        _thresholdLatched = false;
+        _inputSinceTick = false;
+    }
+
+    internal static int ToPercentage(double value, double threshold) =>
+        (int)Math.Round(Math.Clamp(value / (threshold <= 0 ? DefaultThreshold : threshold) * 100, 0, 100));
 
     private void Persist()
     {
         _settings.FatigueValue = Value;
         _settings.FatigueThreshold = Threshold;
         _settings.FatigueIsPaused = IsPaused;
+        _settings.FatigueLastActivity = _lastActivity;
+        _settings.FatiguePendingIdlePoints = _pendingIdlePoints;
     }
 }
