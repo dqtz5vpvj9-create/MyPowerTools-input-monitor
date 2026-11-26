@@ -50,6 +50,14 @@
       "execution": { "type": "module.execute" }
     },
     {
+      "id": "input-monitor.capture",
+      "title": "Start or stop collection",
+      "subtitle": "Pause or resume keyboard, mouse and foreground-app collection without stopping reminders",
+      "kind": "action",
+      "category": "Wellbeing",
+      "execution": { "type": "module.execute" }
+    },
+    {
       "id": "input-monitor.data.clear",
       "title": "Clear collected data",
       "subtitle": "Delete stored input events, app usage and daily statistics",

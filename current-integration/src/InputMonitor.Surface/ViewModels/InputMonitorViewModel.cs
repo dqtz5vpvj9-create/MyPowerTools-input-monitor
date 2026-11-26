@@ -42,8 +42,11 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
     private bool _showApps;
     private bool _showRangeHeat;
     private bool _showDayHeat = true;
+    private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(30);
     private int _refreshGeneration;
     private int _disposed;
+    private bool _isRefreshActive;
+    private bool _wasPaused;
     private int[] _trackCounts = [];
     private double[] _activityValues = new double[24];
     private string[] _activityLabels = Enumerable.Range(0, 24).Select(hour => hour.ToString(CultureInfo.InvariantCulture)).ToArray();
@@ -102,10 +105,10 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
         TrackScreens = [];
         CategorySlices = [];
         _refreshTimer = new Timer(
-            _ => Dispatcher.UIThread.Post(() => _ = RefreshAsync(_lifetime.Token)),
+            OnRefreshTimerTick,
             null,
-            TimeSpan.FromSeconds(30),
-            TimeSpan.FromSeconds(30));
+            Timeout.InfiniteTimeSpan,
+            Timeout.InfiniteTimeSpan);
     }
 
     public ObservableCollection<KeyHeatRow> KeyHeat { get; }
@@ -237,6 +240,50 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
 
     public Task InitializeAsync() => RefreshAsync(_lifetime.Token);
 
+    public void SetRefreshActive(bool isActive)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        if (_isRefreshActive == isActive)
+        {
+            return;
+        }
+
+        _isRefreshActive = isActive;
+        if (!isActive)
+        {
+            _wasPaused = true;
+            _refreshTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            return;
+        }
+
+        _refreshTimer.Change(RefreshInterval, RefreshInterval);
+        if (_wasPaused)
+        {
+            _wasPaused = false;
+            _ = RefreshAsync(_lifetime.Token);
+        }
+    }
+
+    private void OnRefreshTimerTick(object? state)
+    {
+        if (!Volatile.Read(ref _isRefreshActive) || Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (Volatile.Read(ref _isRefreshActive) && Volatile.Read(ref _disposed) == 0)
+            {
+                _ = RefreshAsync(_lifetime.Token);
+            }
+        });
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -244,6 +291,7 @@ public sealed class InputMonitorViewModel : ToolSurfacePageViewModel, IDisposabl
             return;
         }
 
+        _isRefreshActive = false;
         _refreshTimer.Dispose();
         _lifetime.Cancel();
         _lifetime.Dispose();

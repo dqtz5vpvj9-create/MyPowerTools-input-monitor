@@ -21,12 +21,21 @@ internal sealed class WindowsInputCapture : IInputCapture
     private const int WmMouseWheel = 0x020A;
     private const int WmMouseHWheel = 0x020E;
     private const int WheelDelta = 120;
+    private const int ActiveCursorPollMs = 33;
+    private const int IdleCursorPollMs = 250;
+    private const int IdleCursorThresholdTicks = 15;
 
     private readonly EventSampler _sampler = new();
     private readonly HashSet<int> _keysDown = [];
     private readonly object _gate = new();
+    private readonly ManualResetEventSlim _loopReady = new(false);
     private Thread? _thread;
     private uint _threadId;
+    private Timer? _cursorPoller;
+    private int _lastCursorX = int.MinValue;
+    private int _lastCursorY = int.MinValue;
+    private int _idleCursorTicks;
+    private bool _cursorPollingSlow;
     private nint _keyboardHook;
     private nint _mouseHook;
     private nint _keyboardProc;
@@ -36,7 +45,7 @@ internal sealed class WindowsInputCapture : IInputCapture
     private bool _running;
 
     public event Action<InputEventRecord>? EventReceived;
-    public bool IsRunning => _running;
+    public bool IsRunning => Volatile.Read(ref _running);
     public bool HookInstallFailed { get; private set; }
 
     public void Start()
@@ -54,6 +63,8 @@ internal sealed class WindowsInputCapture : IInputCapture
             }
 
             _running = true;
+            _threadId = 0;
+            _loopReady.Reset();
             _thread = new Thread(MessageLoop)
             {
                 IsBackground = true,
@@ -65,6 +76,7 @@ internal sealed class WindowsInputCapture : IInputCapture
 
     public void Stop()
     {
+        Thread? thread;
         lock (_gate)
         {
             if (!_running)
@@ -73,14 +85,28 @@ internal sealed class WindowsInputCapture : IInputCapture
             }
 
             _running = false;
-            if (_threadId != 0)
-            {
-                PostThreadMessage(_threadId, WmQuit, 0, 0);
-            }
+            thread = _thread;
+            _thread = null;
         }
 
-        _thread?.Join(TimeSpan.FromSeconds(2));
-        _thread = null;
+        if (thread is null)
+        {
+            return;
+        }
+
+        _loopReady.Wait(TimeSpan.FromSeconds(1));
+        uint threadId;
+        lock (_gate)
+        {
+            threadId = _threadId;
+        }
+
+        if (threadId != 0)
+        {
+            PostThreadMessage(threadId, WmQuit, 0, 0);
+        }
+
+        thread.Join(TimeSpan.FromSeconds(2));
     }
 
     public void UpdateTrackSampleDistance(double pixels) => _sampler.MinDistance = pixels;
@@ -89,7 +115,20 @@ internal sealed class WindowsInputCapture : IInputCapture
 
     private void MessageLoop()
     {
-        _threadId = GetCurrentThreadId();
+        // Force creation of this thread's Win32 message queue before exposing _threadId
+        // so PostThreadMessage(WM_QUIT) from Stop() can never race ahead of queue init.
+        PeekMessage(out _, 0, 0, 0, 0);
+        lock (_gate)
+        {
+            _threadId = GetCurrentThreadId();
+            _loopReady.Set();
+            if (!_running)
+            {
+                _threadId = 0;
+                return;
+            }
+        }
+
         _keyboardCallback = KeyboardHook;
         _mouseCallback = MouseHook;
         _keyboardProc = Marshal.GetFunctionPointerForDelegate(_keyboardCallback);
@@ -111,10 +150,19 @@ internal sealed class WindowsInputCapture : IInputCapture
             HookInstallFailed = true;
         }
 
-        var poller = new Timer(_ => PollCursor(), null, TimeSpan.FromMilliseconds(33), TimeSpan.FromMilliseconds(33));
+        _lastCursorX = int.MinValue;
+        _lastCursorY = int.MinValue;
+        _idleCursorTicks = 0;
+        _cursorPollingSlow = false;
+        var poller = new Timer(
+            _ => PollCursor(),
+            null,
+            TimeSpan.FromMilliseconds(ActiveCursorPollMs),
+            TimeSpan.FromMilliseconds(ActiveCursorPollMs));
+        _cursorPoller = poller;
         try
         {
-            while (GetMessage(out var message, 0, 0, 0) > 0)
+            while (Volatile.Read(ref _running) && GetMessage(out var message, 0, 0, 0) > 0)
             {
                 TranslateMessage(ref message);
                 DispatchMessage(ref message);
@@ -122,6 +170,7 @@ internal sealed class WindowsInputCapture : IInputCapture
         }
         finally
         {
+            _cursorPoller = null;
             poller.Dispose();
             if (_keyboardHook != 0)
             {
@@ -137,6 +186,10 @@ internal sealed class WindowsInputCapture : IInputCapture
             _mouseHook = 0;
             _keyboardCallback = null;
             _mouseCallback = null;
+            lock (_gate)
+            {
+                _threadId = 0;
+            }
         }
     }
 
@@ -227,12 +280,49 @@ internal sealed class WindowsInputCapture : IInputCapture
 
     private void PollCursor()
     {
-        if (!GetCursorPos(out var point))
+        if (!Volatile.Read(ref _running) || !GetCursorPos(out var point))
         {
             return;
         }
 
-        var (sampled, delta) = _sampler.Feed(point.X, point.Y, NowNs());
+        if (point.X == _lastCursorX && point.Y == _lastCursorY)
+        {
+            if (!_cursorPollingSlow && ++_idleCursorTicks >= IdleCursorThresholdTicks)
+            {
+                _cursorPollingSlow = true;
+                try
+                {
+                    _cursorPoller?.Change(
+                        TimeSpan.FromMilliseconds(IdleCursorPollMs),
+                        TimeSpan.FromMilliseconds(IdleCursorPollMs));
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+
+            return;
+        }
+
+        _lastCursorX = point.X;
+        _lastCursorY = point.Y;
+        _idleCursorTicks = 0;
+        if (_cursorPollingSlow)
+        {
+            _cursorPollingSlow = false;
+            try
+            {
+                _cursorPoller?.Change(
+                    TimeSpan.FromMilliseconds(ActiveCursorPollMs),
+                    TimeSpan.FromMilliseconds(ActiveCursorPollMs));
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
+        var nowNs = NowNs();
+        var (sampled, delta) = _sampler.Feed(point.X, point.Y, nowNs);
         if (!sampled)
         {
             return;
@@ -240,7 +330,7 @@ internal sealed class WindowsInputCapture : IInputCapture
 
         Publish(new InputEventRecord(
             InputEventKind.MouseMoveSample,
-            NowNs(),
+            nowNs,
             DateTimeOffset.Now,
             point.X,
             point.Y,
@@ -329,6 +419,9 @@ internal sealed class WindowsInputCapture : IInputCapture
 
     [DllImport("user32.dll")]
     private static extern int GetMessage(out Msg lpMsg, nint hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+
+    [DllImport("user32.dll")]
+    private static extern bool PeekMessage(out Msg lpMsg, nint hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
 
     [DllImport("user32.dll")]
     private static extern bool TranslateMessage(ref Msg lpMsg);
